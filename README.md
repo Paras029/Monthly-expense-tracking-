@@ -21,35 +21,57 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
 ## Usage
 
 - **Log an expense:** message the bot on Telegram, e.g. `gym 1500`,
-  `Zomato lunch 300`, `oyo 1500 travel`.
-- **Pay by credit card:** add `credit` (or `card`/`cc`), e.g.
-  `electricity bill 2200 credit`. Default payment source is your salary.
+  `Zomato lunch 300`, `oyo 1500 travel`. Every expense gets two tags: a
+  **type** (`fixed`/`variable`/`one-off`/`saving`) and a **cadence**
+  (`daily`/`weekly`/`monthly`/`annual`) — both default to the category's own
+  settings (🏷 Categories), so routine logging never needs a tag.
+- **Pay by credit card or from your Liquid fund:** add `credit` (or
+  `card`/`cc`) or `liquid`, e.g. `electricity bill 2200 credit`. Default
+  payment source is your Wallet.
 - **Tag a fixed monthly cost:** add `fixed` (or `recurring`/`subscription`), e.g.
-  `rent 21500 fixed`. It still counts against this month's salary/credit, but
+  `rent 21500 fixed`. It still counts against your Wallet/Credit, but
   insights won't suggest "cutting" it the way they would a variable purchase.
 - **Tag an annual cross-cutting cost:** add `yearly` (or `annual`/`annually`), e.g.
   `gym membership 12000 yearly`. Same idea, for costs paid once a year — both
   show up in the dashboard's "Fixed & recurring expenses" section instead of
   skewing one month's numbers.
-- **Set your salary/credit limit:** `/salary 60000`, `/credit 20000` on the
-  bot, or via the ⚙ Settings panel on the dashboard.
+- **Tag a one-off anomaly:** add `oneoff` (or `one-off`), e.g.
+  `flight to goa 15000 oneoff liquid`. Still counted against whichever
+  account paid for it, but excluded from the projected month-end pace since
+  it's not a recurring pattern — ideally paid from your Liquid fund.
+- **Add income to your Wallet:** `/income 60000 July salary` on the bot, or
+  "+ Add income" on the dashboard's Wallet & Accounts section. Your Wallet
+  balance is the real running total — salary/bonus/freelance in, expenses out.
+- **Settle your credit card:** `/settle 5000` on the bot, or "Settle credit"
+  on the dashboard — pays down Credit from your Wallet. Credit is revolving:
+  an unsettled balance carries into next month rather than resetting, and the
+  dashboard nags you with a banner once your payday (the 25th, or the last
+  working day before it) has passed with anything still outstanding.
+- **Set your reference income/credit limit:** `/salary 60000`, `/credit 20000` on the
+  bot, or via the ⚙ Settings panel on the dashboard. `monthly_salary` is just
+  a target for %-used displays — your Wallet's actual balance comes from
+  logged income, not this number.
 - **View the dashboard:** open `http://localhost:8000` on the tablet, or
   `http://<tablet-lan-ip>:8000` from a phone on the same wifi.
 - **Manage categories:** use the 🏷 Categories panel on the dashboard to
-  add/edit/delete categories, colors, monthly caps, and keyword aliases — no
-  code editing needed. Kind `saving` = a long-term investment vehicle (SIP,
-  gold plan, FDs — each tracked independently); kind `liquid` = an
-  emergency/liquid cash fund (rolls up into the "Liquid fund" card at top).
+  add/edit/delete categories, colors, default type/cadence, monthly caps, and
+  keyword aliases — no code editing needed. A `saving`-type category can
+  optionally "feed the Liquid fund" (its deposits count toward the Liquid
+  balance instead of being tracked as an investment vehicle).
 - **Edit or delete a logged expense:** on the dashboard, tap ✎ next to any
   row in Recent Activity — change its category, note, amount, date, payment
-  source, or fixed/yearly tag, or delete it outright.
-- **Track multiple investments:** add a vehicle from the Long-term
-  investments section (or 🏷 Categories, kind `saving`) and update each
-  one's current value independently — the dashboard shows how long ago each
-  was last updated.
+  source, or type/cadence tags, or delete it outright.
+- **Track multiple investments:** add a vehicle from the Savings section (or
+  🏷 Categories, type `saving`) and update each one's current value
+  independently — the dashboard shows how long ago each was last updated,
+  and a dropdown lets you view a single vehicle's own chart instead of the
+  combined one.
+- **Export your data:** the ⬇ Export button in the dashboard header downloads
+  a full-history Excel workbook (transactions, monthly summary, category
+  breakdown, accounts ledger, investment history) for offline analysis.
 - **Bot commands:** `/start`, `/undo`, `/cat <Category>`, `/today`, `/month`,
-  `/insights`, `/salary <amount>`, `/credit <amount>`,
-  `/portfolio <vehicle> <amount>`, `/recap`.
+  `/insights`, `/income <amount> [note]`, `/settle <amount>`, `/wallet`,
+  `/salary <amount>`, `/credit <amount>`, `/portfolio <vehicle> <amount>`, `/recap`.
 
 ## Without a Telegram bot token
 

@@ -43,18 +43,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         raw_message=message,
         guessed=result["guessed"],
         payment_source=result["payment_source"],
-        recurrence=result["recurrence"],
+        expense_type=result["expense_type"],
+        cadence=result["cadence"],
     )
 
-    source_icon = "💳" if result["payment_source"] == "credit" else "💰"
+    source_icon = {"credit": "💳", "liquid": "💧"}.get(result["payment_source"], "💰")
+    type_badge = {
+        "fixed": " · 📌 Fixed",
+        "one-off": " · 🎲 One-off",
+        "saving": " · 📈 Saving",
+    }.get(result["expense_type"], "")
+    cadence_badge = f" ({result['cadence']})" if result["cadence"] and result["expense_type"] != "variable" else ""
+
     reply = f"✅ {_fmt_amount(result['amount'])} · {result['category']}"
     if result["note"]:
         reply += f" · {result['note']}"
     reply += f" · {source_icon} {result['payment_source'].title()}"
-    if result["recurrence"] == "yearly":
-        reply += " · 🔁 Yearly"
-    elif result["recurrence"] == "monthly":
-        reply += " · 📌 Fixed"
+    reply += type_badge + cadence_badge
     reply += f"  (id {txn_id})"
     if result["guessed"]:
         reply += "\n⚠️ guessed category — reply /cat Food to fix"
@@ -73,20 +78,27 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  oyo 1500 travel\n"
         "  SIP index fund 5000\n"
         "  electricity bill 2200 credit    → paid by credit card\n"
-        "  rent 21500 fixed                → fixed monthly cost (won't skew 'top category')\n"
-        "  gym membership 12000 yearly     → annual cross-cutting cost\n\n"
-        "Payment defaults to salary unless you add 'credit'/'card'.\n"
-        "Add 'fixed'/'recurring'/'subscription' for a cost that repeats every month at\n"
-        "roughly the same amount (rent, a SIP, a subscription) — insights won't suggest\n"
-        "'cutting' it the way they would a variable purchase.\n"
-        "Add 'yearly'/'annual'/'annually' for an annual cross-cutting cost instead.\n\n"
+        "  rent 21500 fixed                → fixed monthly cost\n"
+        "  gym membership 12000 yearly     → fixed, annual cadence\n"
+        "  flight to goa 15000 oneoff liquid → one-off anomaly, paid from Liquid fund\n\n"
+        "Every expense gets two tags:\n"
+        "  type: fixed (locked-in, e.g. rent) | variable (routine, e.g. food) | "
+        "one-off (an anomaly, e.g. a trip — excluded from your monthly pace) | saving\n"
+        "  cadence: daily/weekly/monthly/annual — how often it recurs\n"
+        "New transactions default to their category's own tags (set once via 🏷 "
+        "Categories); add a keyword ('fixed', 'oneoff', 'weekly', 'yearly', ...) to "
+        "override just that message.\n\n"
+        "Payment defaults to your Wallet unless you add 'credit'/'card' or 'liquid'.\n\n"
         "Commands:\n"
         "/undo — delete the last transaction\n"
         "/cat <Category> — recategorise the last transaction\n"
         "/today — today's spend\n"
-        "/month — this month vs salary & credit\n"
+        "/month — this month vs wallet & credit\n"
         "/insights — monthly insight bullets\n"
-        "/salary <amount> — set your monthly salary\n"
+        "/income <amount> [note] — log money into your Wallet (salary, bonus, ...)\n"
+        "/settle <amount> — pay down Credit from your Wallet\n"
+        "/wallet — wallet/credit/liquid balances + payday status\n"
+        "/salary <amount> — set your reference monthly income (for %-used displays)\n"
         "/credit <amount> — set your credit limit\n"
         "/portfolio <vehicle> <amount> — log this month's value for one investment "
         "vehicle (e.g. /portfolio Investments 150000); no args lists all vehicles\n"
@@ -158,10 +170,10 @@ async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     month = date.today().strftime("%Y-%m")
     m = insights.compute_metrics(month)
     await update.message.reply_text(
-        f"💰 Salary: {_fmt_amount(m['salary_used'])} of {_fmt_amount(m['monthly_salary'])} used "
-        f"({_fmt_amount(m['salary_left'])} left)\n"
-        f"💳 Credit: {_fmt_amount(m['credit_used'])} of {_fmt_amount(m['credit_limit'])} used "
-        f"({_fmt_amount(m['credit_left'])} left)\n"
+        f"💰 Wallet: {_fmt_amount(m['wallet_used'])} spent this month "
+        f"(vs {_fmt_amount(m['monthly_salary'])} reference income)\n"
+        f"💳 Credit: {_fmt_amount(m['credit_outstanding'])} outstanding of "
+        f"{_fmt_amount(m['credit_limit'])} limit ({_fmt_amount(m['credit_available'])} available)\n"
         f"Projected month-end: {_fmt_amount(m['projected'])}\n"
         f"Top category: {m['top_category'] or '—'} ({_fmt_amount(m['top_amount'])})\n"
         f"Saved/invested: {_fmt_amount(m['savings_total'])}"
@@ -200,20 +212,88 @@ async def cmd_credit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Credit limit set to {_fmt_amount(amount)}.")
 
 
+async def cmd_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /income <amount> [note], e.g. /income 60000 July salary")
+        return
+    try:
+        amount = float(context.args[0].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("Usage: /income <amount> [note], e.g. /income 60000 July salary")
+        return
+    note = " ".join(context.args[1:]) or None
+    db.log_income(amount, note=note, raw_message=update.message.text)
+    balance = db.get_wallet_balance()
+    await update.message.reply_text(
+        f"💰 +{_fmt_amount(amount)} added to Wallet{f' ({note})' if note else ''}. "
+        f"New balance: {_fmt_amount(balance)}."
+    )
+
+
+async def cmd_settle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    outstanding = db.get_credit_outstanding()
+    if not context.args:
+        if outstanding <= 0:
+            await update.message.reply_text("No outstanding credit to settle.")
+        else:
+            await update.message.reply_text(
+                f"Outstanding credit: {_fmt_amount(outstanding)}. Usage: /settle <amount>, "
+                f"e.g. /settle {outstanding:.0f} to pay it off in full."
+            )
+        return
+    try:
+        amount = float(context.args[0].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("Usage: /settle <amount>, e.g. /settle 5000")
+        return
+    db.settle_credit(amount, raw_message=update.message.text)
+    new_outstanding = db.get_credit_outstanding()
+    await update.message.reply_text(
+        f"💳 Settled {_fmt_amount(amount)} from Wallet. "
+        f"Credit outstanding is now {_fmt_amount(new_outstanding)}."
+    )
+
+
+async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    wallet_balance = db.get_wallet_balance()
+    credit_outstanding = db.get_credit_outstanding()
+    liquid_balance = db.get_liquid_balance()
+    settlement = insights.credit_settlement_status()
+    lines = [
+        f"💰 Wallet: {_fmt_amount(wallet_balance)}",
+        f"💳 Credit outstanding: {_fmt_amount(credit_outstanding)}",
+        f"💧 Liquid fund: {_fmt_amount(liquid_balance)}",
+    ]
+    if settlement["needs_settlement"]:
+        lines.append(
+            f"⚠️ Unsettled credit past payday ({settlement['payday']}) — /settle to pay it down."
+        )
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_allowed(update):
         return
     from datetime import date
 
     month = date.today().strftime("%Y-%m")
-    saving_categories = {c["name"]: c["name"] for c in db.get_categories() if c["kind"] == "saving"}
+    saving_categories = {
+        c["name"]: c["name"] for c in db.get_categories()
+        if c["expense_type"] == "saving" and not c["account_link"]
+    }
     saving_by_lower = {name.lower(): name for name in saving_categories}
 
     if not context.args:
         # list every vehicle's latest value + how stale it is
         if not saving_categories:
             await update.message.reply_text(
-                "No investment vehicles yet — add a category with kind 'saving' "
+                "No investment vehicles yet — add a category with expense_type 'saving' "
                 "(e.g. Investments, Gold Plan, Fixed Deposits) in the dashboard's 🏷 Categories panel."
             )
             return
@@ -246,7 +326,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text(
-                "No investment vehicles yet — add a category with kind 'saving' first."
+                "No investment vehicles yet — add a category with expense_type 'saving' first."
             )
         return
     try:
@@ -301,6 +381,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("insights", cmd_insights))
     app.add_handler(CommandHandler("salary", cmd_salary))
     app.add_handler(CommandHandler("credit", cmd_credit))
+    app.add_handler(CommandHandler("income", cmd_income))
+    app.add_handler(CommandHandler("settle", cmd_settle))
+    app.add_handler(CommandHandler("wallet", cmd_wallet))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
     app.add_handler(CommandHandler("recap", cmd_recap))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

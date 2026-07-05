@@ -18,14 +18,16 @@ import parser
 
 PROMPT_TEMPLATE = """You are a terse personal-finance analyst reviewing one person's \
 spending data. Write a short day-by-day and cumulative analysis of their week/month so \
-far. Only call out real, notable patterns — trends, spikes, pace vs their salary+credit, \
-category shifts, streaks of high spend. Skip anything unremarkable; do not restate every \
-number in the data.
+far. Only call out real, notable patterns — trends, spikes, pace vs their reference \
+income+credit, category shifts, streaks of high spend. Skip anything unremarkable; do \
+not restate every number in the data.
 
 month_to_date.fixed_total is locked-in recurring costs (rent, subscriptions, a SIP) the \
 user didn't choose this month and can't meaningfully cut — never suggest reducing them. \
+month_to_date.oneoff_total is anomalous one-time spend (a trip, a big purchase) already \
+excluded from projected_month_end — don't treat it as a spending habit either. \
 month_to_date.variable_total is what's actually discretionary; base any "you could cut \
-back on X" observation only on variable spend, never on fixed costs.
+back on X" observation only on variable spend, never on fixed or one-off amounts.
 
 Output 3-5 short plain-text lines, one observation per line. No headers, no markdown, no \
 bullet characters, no preamble, no sign-off. Write amounts as ₹ with comma separators.
@@ -78,15 +80,16 @@ def _gather_recap_data(day_str):
             "savings_contributed": round(m["savings_total"]),
             "fixed_total": round(m["fixed_total"]),
             "variable_total": round(m["variable_total"]),
+            "oneoff_total": round(m["oneoff_total"]),
             "top_category": m["top_category"],
             "top_category_amount": round(m["top_amount"]) if m["top_category"] else None,
             "top_variable_category": m["top_variable_category"],
             "top_variable_category_amount": round(m["top_variable_amount"]) if m["top_variable_category"] else None,
-            "discretionary_pct_of_spend": round(m["discretionary_pct"], 1),
         },
         "projected_month_end": round(m["projected"]),
-        "monthly_salary": m["monthly_salary"],
+        "reference_monthly_income": m["monthly_salary"],
         "credit_limit": m["credit_limit"],
+        "credit_outstanding": round(m["credit_outstanding"]),
         "categories_over_their_cap": categories_over_cap,
     }
 

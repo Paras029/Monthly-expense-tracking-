@@ -1,15 +1,18 @@
 """FastAPI app: JSON API for the dashboard + serves the static index.html.
 Only the category/keyword/settings/transaction-edit endpoints write to the
 DB — new transactions are still only ever created by the Telegram bot."""
+import io
 from datetime import date, datetime
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import ai_insights
 import db
+import export
 import insights
 
 app = FastAPI(title="Personal Cashflow Ledger")
@@ -36,16 +39,23 @@ def _last_n_months(n: int, month: str) -> list[str]:
     return months
 
 
+def _is_vehicle(cat):
+    """A real investment vehicle: expense_type='saving' and not linked to
+    the Liquid account (account_link='liquid' categories are cash deposits,
+    not something with a fluctuating value/gain to track)."""
+    return cat["expense_type"] == "saving" and not cat["account_link"]
+
+
 def _savings_effective_balance(month):
-    """Sum across all kind='saving' vehicles of (manually-set value as of
-    this month if one exists, else cumulative contributed-to-date as a floor
+    """Sum across all investment vehicles of (manually-set value as of this
+    month if one exists, else cumulative contributed-to-date as a floor
     estimate) — a "real" savings figure that updates the moment a vehicle's
     value is set, not just when a new transaction is logged. Shared by the
     top Savings card and the Long-term investments total so they always
     agree."""
     total = 0.0
     for cat in db.get_categories():
-        if cat["kind"] != "saving":
+        if not _is_vehicle(cat):
             continue
         snap = db.get_snapshot_as_of(cat["name"], month)
         if snap:
@@ -63,22 +73,21 @@ def api_summary(month: str = Query(default=None), view: str = Query(default="all
     categories = {c["name"]: c for c in db.get_categories()}
 
     # "view" re-slices the same month's breakdown for the "where the money
-    # goes" toggle: 'all' is the usual spend-pattern donut (excludes
-    # saving/liquid so contributions don't dominate a chart about spending
-    # habits); 'salary'/'credit' slice by how it was paid; 'saving'/'liquid'
-    # show just those two kinds' own per-category split (the very thing 'all'
-    # deliberately excludes).
+    # goes" toggle: 'all' is the usual spend-pattern donut (excludes saving
+    # so contributions don't dominate a chart about spending habits);
+    # 'wallet'/'credit'/'liquid' slice by which account paid for it; 'saving'
+    # shows real investment-vehicle contributions (the thing 'all' excludes).
     if view == "all":
         by_view = m["by_category_spend"]
-    elif view in ("salary", "credit"):
+    elif view in ("wallet", "credit", "liquid"):
         by_view = {}
         for t in db.get_transactions_for_month(month):
             if t["payment_source"] == view:
                 by_view[t["category"]] = by_view.get(t["category"], 0.0) + t["amount"]
-    elif view in ("saving", "liquid"):
+    elif view == "saving":
         by_view = {
             cat: amount for cat, amount in m["by_category"].items()
-            if categories.get(cat, {}).get("kind") == view
+            if _is_vehicle(categories.get(cat, {"expense_type": None, "account_link": None}))
         }
     else:
         raise HTTPException(400, f"Unknown view {view!r}")
@@ -90,27 +99,30 @@ def api_summary(month: str = Query(default=None), view: str = Query(default="all
             "amount": amount,
             "pct": (amount / view_total * 100) if view_total else 0,
             "color": categories.get(cat, {}).get("color", "#64748b"),
-            "kind": categories.get(cat, {}).get("kind", "discretionary"),
+            "expense_type": categories.get(cat, {}).get("expense_type", "variable"),
         }
         for cat, amount in sorted(by_view.items(), key=lambda kv: -kv[1])
     ]
 
     days_left = max(m["days_total"] - m["days_elapsed"], 0)
-    combined_left = m["salary_left"] + m["credit_left"]
+    combined_left = m["wallet_left"] + m["credit_available"]
     per_day_left = (combined_left / days_left) if days_left else 0.0
     # Pace reflects actual day-to-day (variable) spend, not total — a fixed
     # lump sum (rent, a SIP) logged once on day 1 shouldn't read as a
-    # ₹21,500/day pace for the rest of the month.
+    # ₹21,500/day pace for the rest of the month. One-off anomalies (a trip)
+    # are excluded entirely, same as in insights.compute_metrics.
     pace_per_day = (m["variable_total"] / m["days_elapsed"]) if m["days_elapsed"] else 0.0
 
     # savings_balance is the "effective" value (manually-set vehicle values,
     # falling back to contributed-to-date for ones never valued) — distinct
     # from savings_total, which is just *this month's* new contribution.
-    # liquid_balance has no value/gain concept (it's cash, not an investment)
-    # so it's simply the cumulative running balance, which already carries
-    # forward correctly month to month.
+    # wallet_balance/liquid_balance are cumulative running balances that
+    # already carry forward correctly month to month; credit is revolving
+    # debt that only shrinks via an explicit settlement.
     savings_balance = _savings_effective_balance(month)
-    liquid_balance = db.get_cumulative_balance_by_kind("liquid", through_month=month)
+    wallet_balance = db.get_wallet_balance(through_month=month)
+    liquid_balance = db.get_liquid_balance(through_month=month)
+    settlement = insights.credit_settlement_status()
 
     return {
         "month": month,
@@ -121,19 +133,23 @@ def api_summary(month: str = Query(default=None), view: str = Query(default="all
         "days_left": days_left,
         "per_day_left": per_day_left,
         "monthly_salary": m["monthly_salary"],
-        "salary_used": m["salary_used"],
-        "salary_left": m["salary_left"],
-        "salary_pct_used": (m["salary_used"] / m["monthly_salary"] * 100) if m["monthly_salary"] else 0,
+        "wallet_used": m["wallet_used"],
+        "wallet_left": m["wallet_left"],
+        "wallet_balance": wallet_balance,
+        "wallet_pct_used": (m["wallet_used"] / m["monthly_salary"] * 100) if m["monthly_salary"] else 0,
         "credit_limit": m["credit_limit"],
         "credit_used": m["credit_used"],
-        "credit_left": m["credit_left"],
-        "credit_pct_used": (m["credit_used"] / m["credit_limit"] * 100) if m["credit_limit"] else 0,
+        "credit_outstanding": m["credit_outstanding"],
+        "credit_available": m["credit_available"],
+        "credit_pct_used": (m["credit_outstanding"] / m["credit_limit"] * 100) if m["credit_limit"] else 0,
+        "credit_needs_settlement": settlement["needs_settlement"],
+        "credit_payday": settlement["payday"],
         "top_category": m["top_category"],
         "top_amount": m["top_amount"],
         "top_pct": m["top_pct"],
+        "oneoff_total": m["oneoff_total"],
         "savings_total": m["savings_total"],
         "savings_balance": savings_balance,
-        "liquid_total": m["liquid_total"],
         "liquid_balance": liquid_balance,
         "view": view,
         "view_total": view_total,
@@ -210,18 +226,18 @@ def api_monthly(month: str = Query(default=None), category: str = Query(default=
 def api_savings(month: str = Query(default=None)):
     month = month or _current_month()
     months = _last_n_months(6, month)
-    return {"months": db.get_monthly_totals(months, kind="saving")}
+    return {"months": db.get_monthly_totals(months, expense_type="saving")}
 
 
 @app.get("/api/recurring")
 def api_recurring():
     """Fixed & recurring costs — split by cadence since a monthly-fixed cost
     (rent, a subscription) is re-logged every month (we show only the latest
-    instance of each), while yearly cross-cutting ones are rare enough to
+    instance of each), while annual cross-cutting ones are rare enough to
     list in full. monthly_equivalent_total lets the dashboard show one
     combined "≈₹X/month locked in" figure."""
     monthly = db.get_fixed_monthly_costs()
-    yearly = db.get_yearly_costs()
+    yearly = db.get_annual_costs()
     monthly_total = sum(t["amount"] for t in monthly)
     yearly_total = sum(t["amount"] for t in yearly)
     return {
@@ -230,6 +246,77 @@ def api_recurring():
         "monthly_total": monthly_total,
         "yearly_total": yearly_total,
         "monthly_equivalent_total": monthly_total + yearly_total / 12,
+    }
+
+
+@app.get("/api/oneoff")
+def api_oneoff(month: str = Query(default=None)):
+    """One-off/anomalous spend for the month — a trip, a big one-time
+    purchase. Excluded from the projected-month-end pace (see insights.py)
+    since it's not a recurring pattern; surfaced here so it stays visible
+    rather than silently vanishing from the numbers."""
+    month = month or _current_month()
+    txns = db.get_oneoff_transactions(months=[month])
+    total = sum(t["amount"] for t in txns)
+    from_liquid = sum(t["amount"] for t in txns if t["payment_source"] == "liquid")
+    return {"month": month, "transactions": txns, "total": total, "from_liquid": from_liquid}
+
+
+# ---- accounts: wallet (income) / credit (settlement) / liquid ------------
+
+@app.get("/api/accounts")
+def api_accounts():
+    """Wallet/Credit/Liquid balances + payday settlement status — all-time,
+    not scoped to a month, since these are running account balances."""
+    settlement = insights.credit_settlement_status()
+    credit_limit = float(db.get_setting("credit_limit", 0))
+    return {
+        "wallet_balance": db.get_wallet_balance(),
+        "credit_outstanding": settlement["outstanding"],
+        "credit_limit": credit_limit,
+        "credit_available": credit_limit - settlement["outstanding"],
+        "liquid_balance": db.get_liquid_balance(),
+        "payday": settlement["payday"],
+        "needs_settlement": settlement["needs_settlement"],
+    }
+
+
+@app.get("/api/accounts/transactions")
+def api_account_transactions(account: str = Query(default=None), limit: int = Query(default=30)):
+    if account and account not in ("wallet", "credit"):
+        raise HTTPException(400, "account must be 'wallet' or 'credit'")
+    return {"transactions": db.get_account_transactions(account=account, limit=limit)}
+
+
+class IncomeIn(BaseModel):
+    amount: float
+    note: Optional[str] = None
+    txn_date: Optional[str] = None
+
+
+@app.post("/api/accounts/income")
+def api_log_income(body: IncomeIn):
+    if body.amount <= 0:
+        raise HTTPException(400, "amount must be positive")
+    txn_id = db.log_income(body.amount, note=body.note, txn_date=body.txn_date, source="dashboard")
+    return {"ok": True, "id": txn_id, "wallet_balance": db.get_wallet_balance()}
+
+
+class SettleIn(BaseModel):
+    amount: float
+    note: Optional[str] = None
+    txn_date: Optional[str] = None
+
+
+@app.post("/api/accounts/settle")
+def api_settle_credit(body: SettleIn):
+    if body.amount <= 0:
+        raise HTTPException(400, "amount must be positive")
+    db.settle_credit(body.amount, note=body.note, txn_date=body.txn_date, source="dashboard")
+    return {
+        "ok": True,
+        "credit_outstanding": db.get_credit_outstanding(),
+        "wallet_balance": db.get_wallet_balance(),
     }
 
 
@@ -254,19 +341,20 @@ def _vehicle_gain(category, as_of_month):
 
 @app.get("/api/investments")
 def api_investments(month: str = Query(default=None), n: int = Query(default=12)):
-    """Long-term investment tracking, per vehicle: each kind='saving' category
-    (SIP, a gold plan, FDs, ...) is tracked independently — its own
-    automatically-computed cumulative contribution, its own manually-updated
-    current value, and how long ago that value was last updated. Gain is
-    incremental (see _vehicle_gain) — never a since-inception comparison
-    against all-time contributed, which is misleading for a vehicle with any
+    """Savings/investment tracking, per vehicle: each real investment vehicle
+    category (SIP, a gold plan, FDs — expense_type='saving' and not linked
+    to the Liquid account) is tracked independently — its own automatically-
+    computed cumulative contribution, its own manually-updated current
+    value, and how long ago that value was last updated. Gain is incremental
+    (see _vehicle_gain) — never a since-inception comparison against
+    all-time contributed, which is misleading for a vehicle with any
     pre-existing history. "Effective value" (the manually-set value if one
     exists as of this month, else contributed-to-date as a floor estimate)
     feeds both the combined chart and the top Savings card, so updating a
     vehicle's value immediately updates the top-level figure too."""
     month = month or _current_month()
     months = _last_n_months(n, month)
-    saving_categories = [c for c in db.get_categories() if c["kind"] == "saving"]
+    saving_categories = [c for c in db.get_categories() if _is_vehicle(c)]
 
     combined_contributed = {m: 0.0 for m in months}
     combined_effective_value = {m: 0.0 for m in months}
@@ -363,8 +451,8 @@ def api_add_investment_snapshot(body: InvestmentSnapshotIn):
     categories = {c["name"]: c for c in db.get_categories()}
     if body.category not in categories:
         raise HTTPException(404, f"Category {body.category!r} not found")
-    if categories[body.category]["kind"] != "saving":
-        raise HTTPException(400, f"{body.category!r} is not a 'saving' category")
+    if not _is_vehicle(categories[body.category]):
+        raise HTTPException(400, f"{body.category!r} is not an investment vehicle")
     updated_at = db.set_investment_snapshot(body.category, body.month, body.value, body.note)
     return {"ok": True, "updated_at": updated_at}
 
@@ -406,12 +494,19 @@ def api_transactions(month: str = Query(default=None), limit: int = Query(defaul
     return {"month": month, "transactions": txns[:limit]}
 
 
+VALID_PAYMENT_SOURCES = {"wallet", "credit", "liquid"}
+VALID_EXPENSE_TYPES = {"fixed", "variable", "one-off", "saving"}
+VALID_CADENCES = {"daily", "weekly", "monthly", "annual"}
+
+
 class TransactionUpdate(BaseModel):
     category: Optional[str] = None
     note: Optional[str] = None
     amount: Optional[float] = None
     payment_source: Optional[str] = None
-    recurrence: Optional[str] = None
+    expense_type: Optional[str] = None
+    cadence: Optional[str] = None
+    clear_cadence: bool = False
     spent_on: Optional[str] = None
 
 
@@ -421,17 +516,26 @@ def api_update_transaction(txn_id: int, body: TransactionUpdate):
         raise HTTPException(404, f"Transaction {txn_id} not found")
     if body.category is not None and body.category not in db.get_category_names():
         raise HTTPException(400, f"Category {body.category!r} not found")
-    if body.payment_source is not None and body.payment_source not in {"salary", "credit"}:
-        raise HTTPException(400, "payment_source must be 'salary' or 'credit'")
-    if body.recurrence is not None and body.recurrence not in {"one-off", "monthly", "yearly"}:
-        raise HTTPException(400, "recurrence must be 'one-off', 'monthly', or 'yearly'")
+    if body.payment_source is not None and body.payment_source not in VALID_PAYMENT_SOURCES:
+        raise HTTPException(400, f"payment_source must be one of {sorted(VALID_PAYMENT_SOURCES)}")
+    if body.expense_type is not None and body.expense_type not in VALID_EXPENSE_TYPES:
+        raise HTTPException(400, f"expense_type must be one of {sorted(VALID_EXPENSE_TYPES)}")
+    if body.cadence is not None and body.cadence not in VALID_CADENCES:
+        raise HTTPException(400, f"cadence must be one of {sorted(VALID_CADENCES)}")
+    if body.clear_cadence:
+        cadence = None
+    elif body.cadence is not None:
+        cadence = body.cadence
+    else:
+        cadence = -1  # sentinel: leave unchanged
     db.update_transaction(
         txn_id,
         category=body.category,
         note=body.note,
         amount=body.amount,
         payment_source=body.payment_source,
-        recurrence=body.recurrence,
+        expense_type=body.expense_type,
+        cadence=cadence,
         spent_on=body.spent_on,
     )
     return {"ok": True}
@@ -450,16 +554,20 @@ def api_delete_transaction(txn_id: int):
 class CategoryIn(BaseModel):
     name: str
     color: str
-    kind: str
+    expense_type: str
+    cadence: Optional[str] = None
     monthly_cap: Optional[float] = None
     parent_category: Optional[str] = None
     target_amount: Optional[float] = None
     target_date: Optional[str] = None
+    account_link: Optional[str] = None
 
 
 class CategoryUpdate(BaseModel):
     color: Optional[str] = None
-    kind: Optional[str] = None
+    expense_type: Optional[str] = None
+    cadence: Optional[str] = None
+    clear_cadence: bool = False
     monthly_cap: Optional[float] = None
     clear_cap: bool = False
     parent_category: Optional[str] = None
@@ -468,13 +576,12 @@ class CategoryUpdate(BaseModel):
     clear_target_amount: bool = False
     target_date: Optional[str] = None
     clear_target_date: bool = False
+    account_link: Optional[str] = None
+    clear_account_link: bool = False
 
 
 class KeywordIn(BaseModel):
     keyword: str
-
-
-VALID_KINDS = {"essential", "discretionary", "saving", "liquid"}
 
 
 @app.get("/api/categories")
@@ -486,19 +593,30 @@ def api_get_categories():
     return {"categories": categories}
 
 
+VALID_ACCOUNT_LINKS = {"liquid"}
+
+
 @app.post("/api/categories")
 def api_add_category(body: CategoryIn):
-    if body.kind not in VALID_KINDS:
-        raise HTTPException(400, f"kind must be one of {sorted(VALID_KINDS)}")
+    if body.expense_type not in VALID_EXPENSE_TYPES:
+        raise HTTPException(400, f"expense_type must be one of {sorted(VALID_EXPENSE_TYPES)}")
+    if body.cadence is not None and body.cadence not in VALID_CADENCES:
+        raise HTTPException(400, f"cadence must be one of {sorted(VALID_CADENCES)}")
     if body.name in db.get_category_names():
         raise HTTPException(409, f"Category {body.name!r} already exists")
     if body.parent_category and body.parent_category not in db.get_category_names():
         raise HTTPException(404, f"Parent category {body.parent_category!r} not found")
+    if body.account_link is not None:
+        if body.account_link not in VALID_ACCOUNT_LINKS:
+            raise HTTPException(400, f"account_link must be one of {sorted(VALID_ACCOUNT_LINKS)}")
+        if body.expense_type != "saving":
+            raise HTTPException(400, "account_link is only valid on a 'saving' category")
     db.add_category(
-        body.name, body.color, body.kind, body.monthly_cap,
+        body.name, body.color, body.expense_type, cadence=body.cadence, monthly_cap=body.monthly_cap,
         parent_category=body.parent_category,
         target_amount=body.target_amount,
         target_date=body.target_date,
+        account_link=body.account_link,
     )
     return {"ok": True}
 
@@ -507,17 +625,24 @@ def api_add_category(body: CategoryIn):
 def api_update_category(name: str, body: CategoryUpdate):
     if name not in db.get_category_names():
         raise HTTPException(404, f"Category {name!r} not found")
-    if body.kind is not None and body.kind not in VALID_KINDS:
-        raise HTTPException(400, f"kind must be one of {sorted(VALID_KINDS)}")
+    if body.expense_type is not None and body.expense_type not in VALID_EXPENSE_TYPES:
+        raise HTTPException(400, f"expense_type must be one of {sorted(VALID_EXPENSE_TYPES)}")
+    if body.cadence is not None and body.cadence not in VALID_CADENCES:
+        raise HTTPException(400, f"cadence must be one of {sorted(VALID_CADENCES)}")
     if body.parent_category and body.parent_category not in db.get_category_names():
         raise HTTPException(404, f"Parent category {body.parent_category!r} not found")
+    if body.account_link is not None and body.account_link not in VALID_ACCOUNT_LINKS:
+        raise HTTPException(400, f"account_link must be one of {sorted(VALID_ACCOUNT_LINKS)}")
     cap = None if body.clear_cap else (body.monthly_cap if body.monthly_cap is not None else -1)
+    cadence = None if body.clear_cadence else (body.cadence if body.cadence is not None else -1)
     parent = None if body.clear_parent else (body.parent_category if body.parent_category is not None else -1)
     target_amount = None if body.clear_target_amount else (body.target_amount if body.target_amount is not None else -1)
     target_date = None if body.clear_target_date else (body.target_date if body.target_date is not None else -1)
+    account_link = None if body.clear_account_link else (body.account_link if body.account_link is not None else -1)
     db.update_category(
-        name, color=body.color, kind=body.kind, monthly_cap=cap,
+        name, color=body.color, expense_type=body.expense_type, cadence=cadence, monthly_cap=cap,
         parent_category=parent, target_amount=target_amount, target_date=target_date,
+        account_link=account_link,
     )
     return {"ok": True}
 
@@ -569,6 +694,22 @@ def api_update_settings(body: SettingsUpdate):
     if body.credit_limit is not None:
         db.set_setting("credit_limit", str(body.credit_limit))
     return {"ok": True}
+
+
+@app.get("/api/export")
+def api_export():
+    """Full-history multi-sheet Excel export (see export.py) — a read-only
+    reporting artifact for offline analysis, not used by the dashboard itself."""
+    wb = export.build_workbook()
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"cashflow-ledger-{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

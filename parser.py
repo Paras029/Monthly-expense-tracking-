@@ -79,34 +79,41 @@ def extract_category(message):
 
 
 def extract_payment_source(message):
-    """Returns (payment_source, strip_span). Defaults to 'salary' with no
+    """Returns (payment_source, strip_span). Defaults to 'wallet' with no
     span when nothing is mentioned explicitly."""
     lower = message.lower()
     for keyword, source in config.PAYMENT_SOURCE_KEYWORDS.items():
         match = re.search(rf"\b{re.escape(keyword)}\b", lower)
         if match:
             return source, match.span()
-    return "salary", None
+    return "wallet", None
 
 
-def extract_recurrence(message):
-    """Returns (recurrence, strip_span). Defaults to 'one-off' with no span.
-
-    'yearly' = an annual cross-cutting cost. 'monthly' = a fixed cost that
-    recurs every month at roughly the same amount (rent, a SIP, a
-    subscription) — flagged so insights don't treat it like a variable
-    purchase you could just decide to spend less on.
-    """
+def extract_expense_type(message):
+    """Returns (expense_type, cadence, strip_span) from an explicit keyword
+    in the message, or (None, None, None) if nothing matched — the caller
+    then falls back to the resolved category's own default expense_type/
+    cadence (see parse_message). 'yearly'/'annual'/'annually' and 'fixed'/
+    'recurring'/'subscription' set both expense_type='fixed' and a cadence
+    together, mirroring the old recurrence keyword semantics."""
     lower = message.lower()
     for keyword in config.YEARLY_KEYWORDS:
         match = re.search(rf"\b{re.escape(keyword)}\b", lower)
         if match:
-            return "yearly", match.span()
-    for keyword in config.MONTHLY_FIXED_KEYWORDS:
+            return "fixed", "annual", match.span()
+    for keyword, (expense_type, cadence) in config.FIXED_CADENCE_KEYWORDS.items():
         match = re.search(rf"\b{re.escape(keyword)}\b", lower)
         if match:
-            return "monthly", match.span()
-    return "one-off", None
+            return expense_type, cadence, match.span()
+    for keyword, expense_type in config.EXPENSE_TYPE_KEYWORDS.items():
+        match = re.search(rf"\b{re.escape(keyword)}\b", lower)
+        if match:
+            return expense_type, None, match.span()
+    for keyword, cadence in config.CADENCE_ONLY_KEYWORDS.items():
+        match = re.search(rf"\b{re.escape(keyword)}\b", lower)
+        if match:
+            return None, cadence, match.span()
+    return None, None, None
 
 
 def strip_note(message, spans):
@@ -162,7 +169,8 @@ def classify_with_gemini(note):
 
 def parse_message(message):
     """Returns a dict: {amount, category, note, guessed, payment_source,
-    recurrence} or {error: str} if the message has no parseable amount.
+    expense_type, cadence} or {error: str} if the message has no parseable
+    amount.
     """
     amount = extract_amount(message)
     if amount is None:
@@ -171,14 +179,32 @@ def parse_message(message):
     amount_match = AMOUNT_RE.search(message)
     category, category_span = extract_category(message)
     payment_source, payment_span = extract_payment_source(message)
-    recurrence, recurrence_span = extract_recurrence(message)
+    tag_expense_type, tag_cadence, tag_span = extract_expense_type(message)
 
-    note = strip_note(message, [amount_match.span(), category_span, payment_span, recurrence_span])
+    note = strip_note(message, [amount_match.span(), category_span, payment_span, tag_span])
 
     guessed = False
     if category is None:
         category = classify_with_gemini(note or message)
         guessed = True
+
+    cat_row = db.get_category(category) or {}
+    cat_expense_type = cat_row.get("expense_type") or "variable"
+    cat_cadence = cat_row.get("cadence")
+
+    if tag_expense_type is None:
+        # no explicit expense_type keyword in the message -> use the
+        # category's own default (set once via the Categories panel).
+        expense_type = cat_expense_type
+    elif tag_expense_type == "fixed" and cat_expense_type == "saving":
+        # a bare cadence keyword ("sip 5000 yearly") on an already-saving
+        # category sets cadence only — it shouldn't downgrade a SIP away
+        # from being a saving vehicle just because it also recurs annually.
+        expense_type = "saving"
+    else:
+        expense_type = tag_expense_type
+
+    cadence = tag_cadence if tag_cadence is not None else cat_cadence
 
     return {
         "amount": amount,
@@ -186,5 +212,6 @@ def parse_message(message):
         "note": note,
         "guessed": guessed,
         "payment_source": payment_source,
-        "recurrence": recurrence,
+        "expense_type": expense_type,
+        "cadence": cadence,
     }

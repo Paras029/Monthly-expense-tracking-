@@ -91,6 +91,7 @@
       </div>
       <div class="flex items-center gap-2">
         <input id="month-picker" type="month" class="card px-3 py-1.5 text-sm text-white [color-scheme:dark]" />
+        <a id="export-excel" href="/api/export" class="card px-3 py-1.5 text-sm icon-btn" title="Export to Excel">⬇ Export</a>
         <button id="open-settings" class="card px-3 py-1.5 text-sm icon-btn" title="Settings">⚙ Settings</button>
         <button id="open-categories" class="card px-3 py-1.5 text-sm icon-btn" title="Manage categories">🏷 Categories</button>
       </div>
@@ -101,27 +102,35 @@
       <a href="#sec-recap" class="navpill">Daily recap</a>
       <a href="#sec-burn" class="navpill">Daily burn</a>
       <a href="#sec-trends" class="navpill">Trends</a>
-      <a href="#sec-investments" class="navpill">Investments</a>
+      <a href="#sec-oneoff" class="navpill">One-off</a>
+      <a href="#sec-investments" class="navpill">Savings</a>
+      <a href="#sec-accounts" class="navpill">Wallet</a>
       <a href="#sec-fixed" class="navpill">Fixed costs</a>
       <a href="#sec-budgets" class="navpill">Budgets</a>
       <a href="#sec-activity" class="navpill">Activity</a>
     </nav>
   </header>
 
+  <!-- Payday / credit settlement banner -->
+  <section id="payday-banner" class="hidden card p-3 sm:p-4 flex items-center justify-between gap-3 flex-wrap" style="border-color:#f59e0b66; background:rgba(245,158,11,0.08)">
+    <p class="text-sm">⚠️ <span id="payday-banner-text">Credit is unsettled past payday.</span></p>
+    <button id="payday-settle-btn" class="btn-primary text-xs rounded-lg px-3 py-1.5 whitespace-nowrap">Settle now</button>
+  </section>
+
   <!-- Summary cards -->
   <section id="sec-summary" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="card card-accent p-4" style="--accent:#f59e0b">
-      <p class="text-[11px] text-muted uppercase tracking-wider">Salary</p>
-      <p id="card-salary" class="text-2xl font-display font-medium mt-1 tnum">₹0</p>
-      <p id="card-salary-sub" class="text-xs text-muted mt-1 tnum">0% of ₹0 used</p>
+      <p class="text-[11px] text-muted uppercase tracking-wider">Wallet</p>
+      <p id="card-wallet" class="text-2xl font-display font-medium mt-1 tnum">₹0</p>
+      <p id="card-wallet-sub" class="text-xs text-muted mt-1 tnum">₹0 spent this month</p>
       <div class="h-1.5 rounded-full bg-[#21242f] mt-2 overflow-hidden">
-        <div id="card-salary-bar" class="h-full bg-amber-500" style="width:0%"></div>
+        <div id="card-wallet-bar" class="h-full bg-amber-500" style="width:0%"></div>
       </div>
     </div>
     <div class="card card-accent p-4" style="--accent:#38bdf8">
       <p class="text-[11px] text-muted uppercase tracking-wider">Credit</p>
       <p id="card-credit" class="text-2xl font-display font-medium mt-1 tnum">₹0</p>
-      <p id="card-credit-sub" class="text-xs text-muted mt-1 tnum">0% of ₹0 used</p>
+      <p id="card-credit-sub" class="text-xs text-muted mt-1 tnum">0% of ₹0 outstanding</p>
       <div class="h-1.5 rounded-full bg-[#21242f] mt-2 overflow-hidden">
         <div id="card-credit-bar" class="h-full bg-sky-500" style="width:0%"></div>
       </div>
@@ -134,7 +143,7 @@
     <div class="card card-accent p-4" style="--accent:#818cf8">
       <p class="text-[11px] text-muted uppercase tracking-wider">Liquid fund</p>
       <p id="card-liquid" class="text-2xl font-display font-medium mt-1 tnum">₹0</p>
-      <p id="card-liquid-sub" class="text-xs text-muted mt-1 tnum">+₹0 this month</p>
+      <p id="card-liquid-sub" class="text-xs text-muted mt-1 tnum">0 in one-off spend this month</p>
     </div>
   </section>
 
@@ -144,7 +153,7 @@
       <h2 class="font-display text-lg">Where the money goes</h2>
       <div id="spend-view-toggle" class="flex gap-1 flex-wrap text-xs">
         <button data-view="all" class="view-pill px-2.5 py-1 rounded-full">All spend</button>
-        <button data-view="salary" class="view-pill px-2.5 py-1 rounded-full">💰 Salary</button>
+        <button data-view="wallet" class="view-pill px-2.5 py-1 rounded-full">💰 Wallet</button>
         <button data-view="credit" class="view-pill px-2.5 py-1 rounded-full">💳 Credit</button>
         <button data-view="saving" class="view-pill px-2.5 py-1 rounded-full">📈 Savings</button>
         <button data-view="liquid" class="view-pill px-2.5 py-1 rounded-full">💧 Liquid fund</button>
@@ -154,8 +163,10 @@
       <div class="relative h-64">
         <canvas id="donut-chart"></canvas>
         <div id="donut-center" class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span id="donut-label" class="text-xs text-muted">Total</span>
-          <span id="donut-total" class="text-lg font-display tnum">₹0</span>
+          <div class="rounded-xl px-3 py-1.5 text-center" style="background:rgba(21,24,34,0.92); backdrop-filter:blur(3px);">
+            <span id="donut-label" class="block text-xs text-muted">Total</span>
+            <span id="donut-total" class="block text-lg font-display tnum">₹0</span>
+          </div>
         </div>
       </div>
       <div>
@@ -210,16 +221,27 @@
       <div class="h-56"><canvas id="monthly-chart"></canvas></div>
     </div>
     <div class="card p-4 sm:p-5">
-      <h2 class="font-display text-lg mb-1">Savings &amp; investments</h2>
+      <h2 class="font-display text-lg mb-1">Savings trend</h2>
       <p id="savings-total-sub" class="text-xs text-muted mb-3 tnum">₹0 saved this month</p>
       <div class="h-56"><canvas id="savings-chart"></canvas></div>
     </div>
   </section>
 
-  <!-- Long-term investments -->
+  <!-- One-off / anomalous spend -->
+  <section id="sec-oneoff" class="card p-4 sm:p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="font-display text-lg">One-off spend</h2>
+      <span id="oneoff-total" class="text-sm text-muted tnum">₹0 this month</span>
+    </div>
+    <p class="text-xs text-muted mb-4">Anomalies — a trip, a big one-time purchase — tagged 'oneoff'. Still counted against Wallet/Credit/Liquid above, but excluded from your monthly pace since they're not a recurring pattern. Ideally paid from your Liquid fund.</p>
+    <div id="oneoff-list" class="space-y-2 text-sm"></div>
+    <p id="oneoff-empty" class="text-sm text-muted hidden">No one-off spend logged this month.</p>
+  </section>
+
+  <!-- Savings (long-term investment vehicles) -->
   <section id="sec-investments" class="card p-4 sm:p-5">
     <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
-      <h2 class="font-display text-lg">Long-term investments</h2>
+      <h2 class="font-display text-lg">Savings</h2>
       <button id="open-add-vehicle" class="text-xs icon-btn card px-2 py-1">+ Add investment</button>
     </div>
     <p id="investments-stat" class="text-sm mb-3 tnum"></p>
@@ -231,8 +253,38 @@
     <div class="h-52 mb-5"><canvas id="investments-chart"></canvas></div>
 
     <p class="text-[11px] text-muted uppercase tracking-wider mb-2">Vehicles</p>
+    <p class="text-xs text-muted mb-2">Pick a vehicle from the dropdown above to view or update its value.</p>
     <div id="vehicles-list" class="space-y-3"></div>
-    <p id="vehicles-empty" class="text-sm text-muted hidden">No investment vehicles yet — add one above, or from 🏷 Categories with kind "saving".</p>
+    <p id="vehicles-empty" class="text-sm text-muted hidden">No investment vehicles yet — add one above, or from 🏷 Categories with expense_type "saving".</p>
+  </section>
+
+  <!-- Wallet / Accounts -->
+  <section id="sec-accounts" class="card p-4 sm:p-5">
+    <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+      <h2 class="font-display text-lg">Wallet &amp; Accounts</h2>
+      <div class="flex gap-2">
+        <button id="open-add-income" class="text-xs icon-btn card px-2 py-1">+ Add income</button>
+        <button id="open-settle-credit" class="text-xs icon-btn card px-2 py-1">Settle credit</button>
+      </div>
+    </div>
+    <p class="text-xs text-muted mb-4">Wallet and Liquid carry a running balance month to month. Credit is revolving — unsettled usage stays outstanding until you settle it.</p>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+      <div class="border border-[#262a38] rounded-xl p-3">
+        <p class="text-[11px] text-muted uppercase tracking-wider">Wallet balance</p>
+        <p id="accounts-wallet" class="text-lg font-display font-medium mt-0.5 tnum">₹0</p>
+      </div>
+      <div class="border border-[#262a38] rounded-xl p-3">
+        <p class="text-[11px] text-muted uppercase tracking-wider">Credit outstanding</p>
+        <p id="accounts-credit" class="text-lg font-display font-medium mt-0.5 tnum">₹0</p>
+      </div>
+      <div class="border border-[#262a38] rounded-xl p-3">
+        <p class="text-[11px] text-muted uppercase tracking-wider">Liquid balance</p>
+        <p id="accounts-liquid" class="text-lg font-display font-medium mt-0.5 tnum">₹0</p>
+      </div>
+    </div>
+    <p class="text-[11px] text-muted uppercase tracking-wider mb-2">Recent wallet &amp; credit activity</p>
+    <div id="accounts-ledger" class="space-y-2 text-sm"></div>
+    <p id="accounts-ledger-empty" class="text-sm text-muted hidden">No income or settlements logged yet.</p>
   </section>
 
   <!-- Fixed & recurring expenses -->
@@ -289,7 +341,8 @@
       <h3 class="font-display text-lg">Settings</h3>
       <button class="settings-close icon-btn text-lg leading-none">&times;</button>
     </div>
-    <label class="block text-xs text-muted mb-1">Monthly salary (₹)</label>
+    <label class="block text-xs text-muted mb-1">Reference monthly income (₹)</label>
+    <p class="text-[11px] text-muted mb-1">Used for %-used displays — your Wallet's real balance comes from logged income (+ Add income), not this number.</p>
     <input id="input-salary" type="number" class="w-full px-3 py-2 text-sm mb-3" />
     <label class="block text-xs text-muted mb-1">Credit limit (₹)</label>
     <input id="input-credit" type="number" class="w-full px-3 py-2 text-sm mb-4" />
@@ -310,16 +363,31 @@
       <div class="flex flex-wrap gap-2 items-center">
         <input id="new-cat-name" type="text" placeholder="Name" class="px-2 py-1.5 text-sm w-32" />
         <input id="new-cat-color" type="color" value="#64748b" class="h-8 w-10 p-0.5" />
-        <select id="new-cat-kind" class="px-2 py-1.5 text-sm">
-          <option value="discretionary">discretionary</option>
-          <option value="essential">essential</option>
+        <select id="new-cat-type" class="px-2 py-1.5 text-sm">
+          <option value="variable">variable</option>
+          <option value="fixed">fixed</option>
+          <option value="one-off">one-off</option>
           <option value="saving">saving</option>
-          <option value="liquid">liquid</option>
+        </select>
+        <select id="new-cat-cadence" class="px-2 py-1.5 text-sm">
+          <option value="">no cadence</option>
+          <option value="daily">daily</option>
+          <option value="weekly">weekly</option>
+          <option value="monthly">monthly</option>
+          <option value="annual">annual</option>
         </select>
         <input id="new-cat-cap" type="number" placeholder="Cap (optional)" class="px-2 py-1.5 text-sm w-32" />
+        <label id="new-cat-liquid-wrap" class="hidden text-xs flex items-center gap-1">
+          <input id="new-cat-liquid" type="checkbox" /> feeds Liquid fund
+        </label>
         <button id="add-category" class="btn-primary text-sm rounded-lg px-3 py-1.5">Add</button>
       </div>
-      <p class="text-xs text-muted mt-2">"saving" = a long-term investment vehicle (tracked in Long-term investments). "liquid" = an emergency/liquid cash fund (tracked at the top as its own card).</p>
+      <p class="text-xs text-muted mt-2">
+        <b>fixed</b> = locked-in (rent, subscriptions) · <b>variable</b> = routine day-to-day (food, transport) ·
+        <b>one-off</b> = an anomaly (a trip) excluded from your monthly pace · <b>saving</b> = a long-term
+        investment vehicle (tracked in the Savings section), or check "feeds Liquid fund" to make it a
+        deposit into your spendable Liquid account instead.
+      </p>
     </div>
   </div>
 </div>
@@ -331,7 +399,7 @@
       <h3 class="font-display text-lg">Add investment vehicle</h3>
       <button class="add-vehicle-close icon-btn text-lg leading-none">&times;</button>
     </div>
-    <p class="text-xs text-muted mb-3">A vehicle is just a category with kind "saving" — e.g. a SIP, a gold plan, fixed deposits. Each is tracked independently below.</p>
+    <p class="text-xs text-muted mb-3">A vehicle is just a category with expense_type "saving" — e.g. a SIP, a gold plan, fixed deposits. Each is tracked independently below.</p>
     <label class="block text-xs text-muted mb-1">Name</label>
     <input id="vehicle-name" type="text" placeholder="e.g. Gold Plan" class="w-full px-3 py-2 text-sm mb-3" />
     <label class="block text-xs text-muted mb-1">Color</label>
@@ -346,6 +414,35 @@
     <label class="block text-xs text-muted mb-1">Target date</label>
     <input id="vehicle-target-date" type="date" class="w-full px-3 py-2 text-sm mb-4" />
     <button id="save-vehicle" class="w-full btn-primary text-sm rounded-lg py-2">Add vehicle</button>
+  </div>
+</div>
+
+<!-- Add income modal -->
+<div id="add-income-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
+  <div class="card p-5 w-full max-w-sm">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-display text-lg">Add income to Wallet</h3>
+      <button class="add-income-close icon-btn text-lg leading-none">&times;</button>
+    </div>
+    <label class="block text-xs text-muted mb-1">Amount (₹)</label>
+    <input id="income-amount" type="number" class="w-full px-3 py-2 text-sm mb-3" />
+    <label class="block text-xs text-muted mb-1">Note (optional)</label>
+    <input id="income-note" type="text" placeholder="e.g. July salary, bonus, freelance" class="w-full px-3 py-2 text-sm mb-4" />
+    <button id="save-income" class="w-full btn-primary text-sm rounded-lg py-2">Add income</button>
+  </div>
+</div>
+
+<!-- Settle credit modal -->
+<div id="settle-credit-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
+  <div class="card p-5 w-full max-w-sm">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-display text-lg">Settle credit</h3>
+      <button class="settle-credit-close icon-btn text-lg leading-none">&times;</button>
+    </div>
+    <p id="settle-outstanding-text" class="text-xs text-muted mb-3">Outstanding: ₹0</p>
+    <label class="block text-xs text-muted mb-1">Amount to pay from Wallet (₹)</label>
+    <input id="settle-amount" type="number" class="w-full px-3 py-2 text-sm mb-4" />
+    <button id="save-settle" class="w-full btn-primary text-sm rounded-lg py-2">Settle</button>
   </div>
 </div>
 
@@ -365,22 +462,34 @@
     <input id="edit-txn-amount" type="number" class="w-full px-3 py-2 text-sm mb-3" />
     <label class="block text-xs text-muted mb-1">Date</label>
     <input id="edit-txn-date" type="date" class="w-full px-3 py-2 text-sm mb-3" />
-    <div class="grid grid-cols-2 gap-3 mb-4">
+    <div class="grid grid-cols-2 gap-3 mb-3">
       <div>
         <label class="block text-xs text-muted mb-1">Payment source</label>
         <select id="edit-txn-payment" class="w-full px-3 py-2 text-sm">
-          <option value="salary">💰 Salary</option>
+          <option value="wallet">💰 Wallet</option>
           <option value="credit">💳 Credit</option>
+          <option value="liquid">💧 Liquid</option>
         </select>
       </div>
       <div>
-        <label class="block text-xs text-muted mb-1">Recurrence</label>
-        <select id="edit-txn-recurrence" class="w-full px-3 py-2 text-sm">
-          <option value="one-off">One-off</option>
-          <option value="monthly">📌 Fixed monthly</option>
-          <option value="yearly">🔁 Yearly</option>
+        <label class="block text-xs text-muted mb-1">Type</label>
+        <select id="edit-txn-type" class="w-full px-3 py-2 text-sm">
+          <option value="variable">Variable</option>
+          <option value="fixed">📌 Fixed</option>
+          <option value="one-off">🎲 One-off</option>
+          <option value="saving">📈 Saving</option>
         </select>
       </div>
+    </div>
+    <div class="mb-4">
+      <label class="block text-xs text-muted mb-1">Cadence</label>
+      <select id="edit-txn-cadence" class="w-full px-3 py-2 text-sm">
+        <option value="">No cadence</option>
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+        <option value="annual">Annual</option>
+      </select>
     </div>
     <div class="flex gap-2">
       <button id="delete-txn" class="text-sm text-red-400 hover:text-red-300 px-3 py-2">Delete</button>
@@ -435,7 +544,7 @@ let selectedSpendView = 'all';
 let categoryColorMap = {};
 let categoriesCache = [];
 
-const VIEW_LABELS = { all: 'Total', salary: 'From salary', credit: 'From credit', saving: 'Savings', liquid: 'Liquid fund' };
+const VIEW_LABELS = { all: 'Total', wallet: 'From wallet', credit: 'From credit', saving: 'Savings', liquid: 'Liquid fund' };
 
 async function fetchJSON(path, params) {
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -451,28 +560,35 @@ function statusColor(status) {
   return { good: 'text-emerald-400', watch: 'text-amber-400', note: 'text-sky-400' }[status] || 'text-muted';
 }
 
-function recurrenceBadge(recurrence) {
-  if (recurrence === 'yearly') {
-    return ' <span class="tag bg-purple-500/20 text-purple-300">yearly</span>';
+function expenseTypeBadge(expenseType, cadence) {
+  const labels = {
+    fixed: '<span class="tag bg-blue-500/20 text-blue-300">📌 fixed</span>',
+    'one-off': '<span class="tag bg-purple-500/20 text-purple-300">🎲 one-off</span>',
+    saving: '<span class="tag bg-emerald-500/20 text-emerald-300">📈 saving</span>',
+  };
+  let badge = labels[expenseType] || '';
+  if (cadence && expenseType !== 'variable') {
+    badge += ` <span class="tag bg-[#21242f] text-muted">${cadence}</span>`;
   }
-  if (recurrence === 'monthly') {
-    return ' <span class="tag bg-blue-500/20 text-blue-300">fixed</span>';
-  }
-  return '';
+  return badge ? ' ' + badge : '';
+}
+
+function paymentIcon(source) {
+  return { credit: '💳', liquid: '💧' }[source] || '💰';
 }
 
 async function loadSummary(month, view) {
   view = view || selectedSpendView;
   const s = await fetchJSON('/api/summary', { month, view });
 
-  document.getElementById('card-salary').textContent = fmtINR(s.salary_used);
-  document.getElementById('card-salary-sub').textContent = `${s.salary_pct_used.toFixed(0)}% of ${fmtINR(s.monthly_salary)} used`;
-  document.getElementById('card-salary-bar').style.width = Math.min(s.salary_pct_used, 100) + '%';
-  document.getElementById('card-salary-bar').className = 'h-full ' + (s.salary_pct_used > 100 ? 'bg-red-500' : 'bg-amber-500');
+  document.getElementById('card-wallet').textContent = fmtINR(s.wallet_balance);
+  document.getElementById('card-wallet-sub').textContent = `${fmtINR(s.wallet_used)} spent this month`;
+  document.getElementById('card-wallet-bar').style.width = Math.min(s.wallet_pct_used, 100) + '%';
+  document.getElementById('card-wallet-bar').className = 'h-full ' + (s.wallet_pct_used > 100 ? 'bg-red-500' : 'bg-amber-500');
 
-  document.getElementById('card-credit').textContent = fmtINR(s.credit_used);
+  document.getElementById('card-credit').textContent = fmtINR(s.credit_outstanding);
   document.getElementById('card-credit-sub').textContent = s.credit_limit
-    ? `${s.credit_pct_used.toFixed(0)}% of ${fmtINR(s.credit_limit)} used`
+    ? `${s.credit_pct_used.toFixed(0)}% of ${fmtINR(s.credit_limit)} outstanding`
     : 'No credit limit set';
   document.getElementById('card-credit-bar').style.width = Math.min(s.credit_pct_used, 100) + '%';
   document.getElementById('card-credit-bar').className = 'h-full ' + (s.credit_pct_used > 100 ? 'bg-red-500' : 'bg-sky-500');
@@ -481,7 +597,16 @@ async function loadSummary(month, view) {
   document.getElementById('card-savings-sub').textContent = `+${fmtINR(s.savings_total)} this month`;
 
   document.getElementById('card-liquid').textContent = fmtINR(s.liquid_balance);
-  document.getElementById('card-liquid-sub').textContent = `+${fmtINR(s.liquid_total)} this month`;
+  document.getElementById('card-liquid-sub').textContent = `${fmtINR(s.oneoff_total)} in one-off spend this month`;
+
+  const banner = document.getElementById('payday-banner');
+  if (s.credit_needs_settlement) {
+    document.getElementById('payday-banner-text').textContent =
+      `${fmtINR(s.credit_outstanding)} in credit is unsettled past payday (${s.credit_payday}).`;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
 
   document.getElementById('card-top').textContent = s.top_category || '—';
   document.getElementById('card-top-sub').textContent = `${fmtINR(s.top_amount)} · ${s.top_pct.toFixed(0)}% of spend`;
@@ -946,7 +1071,7 @@ async function loadTransactions(month) {
 
   body.innerHTML = d.transactions.map(t => `
     <tr class="border-b border-[#1b1e29] row-hover">
-      <td class="py-2 pr-4 text-muted whitespace-nowrap">${t.spent_on}${recurrenceBadge(t.recurrence)}</td>
+      <td class="py-2 pr-4 text-muted whitespace-nowrap">${t.spent_on}${expenseTypeBadge(t.expense_type, t.cadence)}</td>
       <td class="py-2 pr-4">
         <span class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full inline-block" style="background:${categoryColorMap[t.category] || '#64748b'}"></span>
@@ -954,7 +1079,7 @@ async function loadTransactions(month) {
         </span>
       </td>
       <td class="py-2 pr-4 text-muted">${t.note || ''}</td>
-      <td class="py-2 pr-4 text-muted whitespace-nowrap">${t.payment_source === 'credit' ? '💳 Credit' : '💰 Salary'}</td>
+      <td class="py-2 pr-4 text-muted whitespace-nowrap">${paymentIcon(t.payment_source)} ${t.payment_source.charAt(0).toUpperCase() + t.payment_source.slice(1)}</td>
       <td class="py-2 pr-4 text-right tnum">${fmtINR(t.amount)}</td>
       <td class="py-2 pl-2 text-right">
         <button class="edit-txn icon-btn" data-id="${t.id}" title="Edit">✎</button>
@@ -980,6 +1105,60 @@ async function loadCategoryMeta() {
   select.value = previousValue;
 }
 
+async function loadOneoff(month) {
+  const d = await fetchJSON('/api/oneoff', { month });
+  document.getElementById('oneoff-total').textContent = `${fmtINR(d.total)} this month`;
+  const list = document.getElementById('oneoff-list');
+  const empty = document.getElementById('oneoff-empty');
+  if (!d.transactions.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = d.transactions.map(t => `
+    <div class="flex items-center justify-between border-b border-[#1b1e29] pb-2">
+      <span>
+        <span class="text-muted">${t.spent_on}</span>
+        · ${t.category} ${t.note ? '· ' + t.note : ''}
+        <span class="text-xs">${paymentIcon(t.payment_source)}</span>
+      </span>
+      <span class="tnum">${fmtINR(t.amount)}</span>
+    </div>
+  `).join('');
+}
+
+async function loadAccounts() {
+  const d = await fetchJSON('/api/accounts');
+  document.getElementById('accounts-wallet').textContent = fmtINR(d.wallet_balance);
+  document.getElementById('accounts-credit').textContent = fmtINR(d.credit_outstanding);
+  document.getElementById('accounts-liquid').textContent = fmtINR(d.liquid_balance);
+
+  const ledgerData = await fetchJSON('/api/accounts/transactions', { limit: 15 });
+  const list = document.getElementById('accounts-ledger');
+  const empty = document.getElementById('accounts-ledger-empty');
+  if (!ledgerData.transactions.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = ledgerData.transactions.map(t => {
+    const positive = t.amount >= 0;
+    const icon = t.account === 'credit' ? '💳' : '💰';
+    const label = t.txn_kind === 'income' ? 'Income' : 'Settlement';
+    return `
+    <div class="flex items-center justify-between border-b border-[#1b1e29] pb-2">
+      <span>
+        <span class="text-muted">${t.txn_date}</span>
+        · ${icon} ${t.account.charAt(0).toUpperCase() + t.account.slice(1)} · ${label}
+        ${t.note ? '· ' + t.note : ''}
+      </span>
+      <span class="tnum ${positive ? 'text-emerald-400' : 'text-red-400'}">${positive ? '+' : '−'}${fmtINR(Math.abs(t.amount))}</span>
+    </div>
+  `; }).join('');
+}
+
 async function loadAll() {
   const month = monthPicker.value || currentMonthStr();
   await loadCategoryMeta().catch((e) => console.error(e));
@@ -991,6 +1170,8 @@ async function loadAll() {
     loadSavings(month),
     loadInvestments(month),
     loadRecurring(),
+    loadOneoff(month),
+    loadAccounts(),
     loadBudgets(month),
     loadTransactions(month),
   ]);
@@ -1056,6 +1237,61 @@ document.getElementById('save-settings').addEventListener('click', async () => {
   loadAll();
 });
 
+// ---- Add income / Settle credit modals ----------------------------------
+
+const addIncomeModal = document.getElementById('add-income-modal');
+function openAddIncomeModal() {
+  document.getElementById('income-amount').value = '';
+  document.getElementById('income-note').value = '';
+  addIncomeModal.classList.remove('hidden');
+  addIncomeModal.classList.add('flex');
+}
+document.getElementById('open-add-income').addEventListener('click', openAddIncomeModal);
+document.querySelectorAll('.add-income-close').forEach(el => el.addEventListener('click', () => {
+  addIncomeModal.classList.add('hidden');
+  addIncomeModal.classList.remove('flex');
+}));
+document.getElementById('save-income').addEventListener('click', async () => {
+  const amount = parseFloat(document.getElementById('income-amount').value);
+  if (isNaN(amount) || amount <= 0) return;
+  const note = document.getElementById('income-note').value.trim() || null;
+  await fetch('/api/accounts/income', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount, note }),
+  });
+  addIncomeModal.classList.add('hidden');
+  addIncomeModal.classList.remove('flex');
+  loadAll();
+});
+
+const settleCreditModal = document.getElementById('settle-credit-modal');
+async function openSettleCreditModal() {
+  const accounts = await fetchJSON('/api/accounts');
+  document.getElementById('settle-outstanding-text').textContent = `Outstanding: ${fmtINR(accounts.credit_outstanding)}`;
+  document.getElementById('settle-amount').value = accounts.credit_outstanding || '';
+  settleCreditModal.classList.remove('hidden');
+  settleCreditModal.classList.add('flex');
+}
+document.getElementById('open-settle-credit').addEventListener('click', openSettleCreditModal);
+document.getElementById('payday-settle-btn').addEventListener('click', openSettleCreditModal);
+document.querySelectorAll('.settle-credit-close').forEach(el => el.addEventListener('click', () => {
+  settleCreditModal.classList.add('hidden');
+  settleCreditModal.classList.remove('flex');
+}));
+document.getElementById('save-settle').addEventListener('click', async () => {
+  const amount = parseFloat(document.getElementById('settle-amount').value);
+  if (isNaN(amount) || amount <= 0) return;
+  await fetch('/api/accounts/settle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount }),
+  });
+  settleCreditModal.classList.add('hidden');
+  settleCreditModal.classList.remove('flex');
+  loadAll();
+});
+
 // ---- Add investment vehicle modal ---------------------------------------
 
 const addVehicleModal = document.getElementById('add-vehicle-modal');
@@ -1066,7 +1302,7 @@ document.getElementById('open-add-vehicle').addEventListener('click', async () =
   const parentSelect = document.getElementById('vehicle-parent');
   const d = await fetchJSON('/api/categories');
   parentSelect.innerHTML = '<option value="">— none, top-level —</option>' +
-    d.categories.filter(c => c.kind === 'saving').map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+    d.categories.filter(c => c.expense_type === 'saving' && !c.account_link).map(c => `<option value="${c.name}">${c.name}</option>`).join('');
   addVehicleModal.classList.remove('hidden');
   addVehicleModal.classList.add('flex');
 });
@@ -1085,7 +1321,7 @@ document.getElementById('save-vehicle').addEventListener('click', async () => {
   const res = await fetch('/api/categories', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, color, kind: 'saving', parent_category, target_amount, target_date }),
+    body: JSON.stringify({ name, color, expense_type: 'saving', parent_category, target_amount, target_date }),
   });
   if (res.ok) {
     addVehicleModal.classList.add('hidden');
@@ -1111,7 +1347,8 @@ function openEditTxnModal(id, transactions) {
   document.getElementById('edit-txn-amount').value = t.amount;
   document.getElementById('edit-txn-date').value = t.spent_on;
   document.getElementById('edit-txn-payment').value = t.payment_source;
-  document.getElementById('edit-txn-recurrence').value = t.recurrence;
+  document.getElementById('edit-txn-type').value = t.expense_type;
+  document.getElementById('edit-txn-cadence').value = t.cadence || '';
   editTxnModal.classList.remove('hidden');
   editTxnModal.classList.add('flex');
 }
@@ -1132,7 +1369,9 @@ document.getElementById('save-txn').addEventListener('click', async () => {
       amount: parseFloat(document.getElementById('edit-txn-amount').value),
       spent_on: document.getElementById('edit-txn-date').value,
       payment_source: document.getElementById('edit-txn-payment').value,
-      recurrence: document.getElementById('edit-txn-recurrence').value,
+      expense_type: document.getElementById('edit-txn-type').value,
+      cadence: document.getElementById('edit-txn-cadence').value || null,
+      clear_cadence: !document.getElementById('edit-txn-cadence').value,
     }),
   });
   editTxnModal.classList.add('hidden');
@@ -1191,7 +1430,7 @@ async function renderCategoriesEditor() {
     }
   });
   const topLevel = d.categories.filter(c => !c.parent_category || !byName[c.parent_category]);
-  const savingCategories = d.categories.filter(c => c.kind === 'saving');
+  const savingCategories = d.categories.filter(c => c.expense_type === 'saving' && !c.account_link);
 
   const renderCat = (c, indented) => `
     <div class="border border-[#262a38] rounded-xl p-3 ${indented ? 'ml-6' : ''}" data-cat="${c.name}">
@@ -1199,23 +1438,35 @@ async function renderCategoriesEditor() {
         ${indented ? '<span class="text-muted text-xs">↳</span>' : ''}
         <input type="color" value="${c.color}" class="cat-color h-7 w-9 p-0.5" />
         <span class="font-medium flex-1">${c.name}</span>
-        <select class="cat-kind text-xs px-2 py-1">
-          <option value="discretionary" ${c.kind === 'discretionary' ? 'selected' : ''}>discretionary</option>
-          <option value="essential" ${c.kind === 'essential' ? 'selected' : ''}>essential</option>
-          <option value="saving" ${c.kind === 'saving' ? 'selected' : ''}>saving</option>
-          <option value="liquid" ${c.kind === 'liquid' ? 'selected' : ''}>liquid</option>
+        <select class="cat-type text-xs px-2 py-1">
+          <option value="variable" ${c.expense_type === 'variable' ? 'selected' : ''}>variable</option>
+          <option value="fixed" ${c.expense_type === 'fixed' ? 'selected' : ''}>fixed</option>
+          <option value="one-off" ${c.expense_type === 'one-off' ? 'selected' : ''}>one-off</option>
+          <option value="saving" ${c.expense_type === 'saving' ? 'selected' : ''}>saving</option>
+        </select>
+        <select class="cat-cadence text-xs px-2 py-1">
+          <option value="" ${!c.cadence ? 'selected' : ''}>no cadence</option>
+          <option value="daily" ${c.cadence === 'daily' ? 'selected' : ''}>daily</option>
+          <option value="weekly" ${c.cadence === 'weekly' ? 'selected' : ''}>weekly</option>
+          <option value="monthly" ${c.cadence === 'monthly' ? 'selected' : ''}>monthly</option>
+          <option value="annual" ${c.cadence === 'annual' ? 'selected' : ''}>annual</option>
         </select>
         <input type="number" placeholder="Cap" class="cat-cap text-xs px-2 py-1 w-24" value="${c.monthly_cap ?? ''}" />
         <button class="cat-save text-xs btn-primary rounded px-2 py-1">Save</button>
         ${c.name !== 'Other' ? '<button class="cat-delete text-xs text-red-400 hover:text-red-300 px-2 py-1">Delete</button>' : ''}
       </div>
-      ${c.kind === 'saving' ? `
-      <div class="mb-2">
-        <label class="text-[11px] text-muted mr-2">Sub-category of</label>
-        <select class="cat-parent text-xs px-2 py-1">
-          <option value="">— none, top-level —</option>
-          ${savingCategories.filter(o => o.name !== c.name).map(o => `<option value="${o.name}" ${c.parent_category === o.name ? 'selected' : ''}>${o.name}</option>`).join('')}
-        </select>
+      ${c.expense_type === 'saving' ? `
+      <div class="mb-2 flex flex-wrap items-center gap-3">
+        <span>
+          <label class="text-[11px] text-muted mr-2">Sub-category of</label>
+          <select class="cat-parent text-xs px-2 py-1">
+            <option value="">— none, top-level —</option>
+            ${savingCategories.filter(o => o.name !== c.name).map(o => `<option value="${o.name}" ${c.parent_category === o.name ? 'selected' : ''}>${o.name}</option>`).join('')}
+          </select>
+        </span>
+        <label class="text-xs flex items-center gap-1">
+          <input type="checkbox" class="cat-liquid" ${c.account_link === 'liquid' ? 'checked' : ''} /> feeds Liquid fund
+        </label>
       </div>` : ''}
       <div class="flex flex-wrap gap-1.5 items-center cat-keywords">
         ${c.keywords.map(k => `<span class="chip">${k}<button data-kw="${k}" class="kw-delete">&times;</button></span>`).join('')}
@@ -1235,17 +1486,22 @@ async function renderCategoriesEditor() {
 
     row.querySelector('.cat-save').addEventListener('click', async () => {
       const color = row.querySelector('.cat-color').value;
-      const kind = row.querySelector('.cat-kind').value;
+      const expense_type = row.querySelector('.cat-type').value;
+      const cadenceVal = row.querySelector('.cat-cadence').value;
       const capVal = row.querySelector('.cat-cap').value;
       const parentSelect = row.querySelector('.cat-parent');
       const parentVal = parentSelect ? parentSelect.value : '';
+      const liquidCheckbox = row.querySelector('.cat-liquid');
+      const accountLinkVal = liquidCheckbox && liquidCheckbox.checked ? 'liquid' : '';
       await fetch(`/api/categories/${encodeURIComponent(name)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          color, kind,
+          color, expense_type,
+          cadence: cadenceVal || null, clear_cadence: cadenceVal === '',
           monthly_cap: capVal === '' ? null : parseFloat(capVal), clear_cap: capVal === '',
           parent_category: parentVal || null, clear_parent: parentVal === '',
+          account_link: accountLinkVal || null, clear_account_link: accountLinkVal === '',
         }),
       });
       renderCategoriesEditor();
@@ -1291,20 +1547,30 @@ document.querySelectorAll('.categories-close').forEach(el => el.addEventListener
   categoriesModal.classList.remove('flex');
 }));
 
+document.getElementById('new-cat-type').addEventListener('change', (e) => {
+  document.getElementById('new-cat-liquid-wrap').classList.toggle('hidden', e.target.value !== 'saving');
+});
+
 document.getElementById('add-category').addEventListener('click', async () => {
   const name = document.getElementById('new-cat-name').value.trim();
   if (!name) return;
   const color = document.getElementById('new-cat-color').value;
-  const kind = document.getElementById('new-cat-kind').value;
+  const expense_type = document.getElementById('new-cat-type').value;
+  const cadenceVal = document.getElementById('new-cat-cadence').value;
   const capVal = document.getElementById('new-cat-cap').value;
+  const account_link = document.getElementById('new-cat-liquid').checked ? 'liquid' : null;
   const res = await fetch('/api/categories', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, color, kind, monthly_cap: capVal === '' ? null : parseFloat(capVal) }),
+    body: JSON.stringify({
+      name, color, expense_type, cadence: cadenceVal || null,
+      monthly_cap: capVal === '' ? null : parseFloat(capVal), account_link,
+    }),
   });
   if (res.ok) {
     document.getElementById('new-cat-name').value = '';
     document.getElementById('new-cat-cap').value = '';
+    document.getElementById('new-cat-liquid').checked = false;
     renderCategoriesEditor();
     loadAll();
   } else {
