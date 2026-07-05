@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import ai_insights
+import chat
 import db
 import export
 import insights
@@ -67,22 +68,29 @@ def _savings_effective_balance(month):
 
 
 @app.get("/api/summary")
-def api_summary(month: str = Query(default=None), view: str = Query(default="all")):
+def api_summary(month: str = Query(default=None), view: str = Query(default="wallet")):
     month = month or _current_month()
     m = insights.compute_metrics(month)
     categories = {c["name"]: c for c in db.get_categories()}
 
     # "view" re-slices the same month's breakdown for the "where the money
-    # goes" toggle: 'all' is the usual spend-pattern donut (excludes saving
-    # so contributions don't dominate a chart about spending habits);
-    # 'wallet'/'credit'/'liquid' slice by which account paid for it; 'saving'
-    # shows real investment-vehicle contributions (the thing 'all' excludes).
-    if view == "all":
+    # goes" toggle: 'wallet' (the default) is the usual spend-pattern donut —
+    # money that actually left your salary/wallet, excluding saving so
+    # contributions don't dominate a chart about spending habits. 'credit'/
+    # 'liquid' slice by that account instead — they're separate pools with
+    # their own ceiling/balance, not blended into the wallet spend view.
+    # 'saving' shows real investment-vehicle contributions.
+    if view == "wallet":
         by_view = m["by_category_spend"]
-    elif view in ("wallet", "credit", "liquid"):
+    elif view == "credit":
         by_view = {}
         for t in db.get_transactions_for_month(month):
-            if t["payment_source"] == view:
+            if t["payment_source"] == "credit":
+                by_view[t["category"]] = by_view.get(t["category"], 0.0) + t["amount"]
+    elif view == "liquid":
+        by_view = {}
+        for t in db.get_transactions_for_month(month):
+            if t["payment_source"] == "liquid":
                 by_view[t["category"]] = by_view.get(t["category"], 0.0) + t["amount"]
     elif view == "saving":
         by_view = {
@@ -105,8 +113,10 @@ def api_summary(month: str = Query(default=None), view: str = Query(default="all
     ]
 
     days_left = max(m["days_total"] - m["days_elapsed"], 0)
-    combined_left = m["wallet_left"] + m["credit_available"]
-    per_day_left = (combined_left / days_left) if days_left else 0.0
+    # Wallet-only, matching the rest of the "expenditure" framing above —
+    # Credit's own available limit is a separate ceiling, not additional
+    # room in your day-to-day salary/wallet budget.
+    per_day_left = (m["wallet_left"] / days_left) if days_left else 0.0
     # Pace reflects actual day-to-day (variable) spend, not total — a fixed
     # lump sum (rent, a SIP) logged once on day 1 shouldn't read as a
     # ₹21,500/day pace for the rest of the month. One-off anomalies (a trip)
@@ -160,7 +170,18 @@ def api_summary(month: str = Query(default=None), view: str = Query(default="all
 @app.get("/api/insights")
 def api_insights(month: str = Query(default=None)):
     month = month or _current_month()
-    return {"month": month, "insights": insights.build_insights(month)}
+    today_txns = db.get_transactions_for_day(_today_str())
+    today_total = sum(t["amount"] for t in today_txns)
+    today_by_category = {}
+    for t in today_txns:
+        today_by_category[t["category"]] = today_by_category.get(t["category"], 0.0) + t["amount"]
+    today_top = max(today_by_category.items(), key=lambda kv: kv[1])[0] if today_by_category else None
+    return {
+        "month": month,
+        "today": {"total": today_total, "count": len(today_txns), "top_category": today_top},
+        "insights": insights.build_insights(month),
+        "trends": insights.build_trend_insights(month),
+    }
 
 
 @app.get("/api/recap")
@@ -174,6 +195,29 @@ def api_recap(date_: str = Query(default=None, alias="date")):
 def api_recap_refresh(date_: str = Query(default=None, alias="date")):
     day = date_ or _today_str()
     return {"date": day, **ai_insights.generate_recap(day, force=True)}
+
+
+class ChatTurn(BaseModel):
+    role: str  # 'user' | 'model'
+    text: str
+
+
+class ChatIn(BaseModel):
+    message: str
+    history: list[ChatTurn] = []
+    month: Optional[str] = None
+
+
+@app.post("/api/chat")
+def api_chat(body: ChatIn):
+    """Chat assistant: one Gemini call per submitted message (see chat.py).
+    `history` is the client's own capped conversation log, replayed back so
+    the model has context — this app has no server-side chat storage."""
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(400, "message cannot be empty")
+    history = [{"role": t.role, "text": t.text} for t in body.history]
+    return chat.chat_reply(history, message, month=body.month)
 
 
 @app.get("/api/daily-burn")
@@ -318,6 +362,23 @@ def api_settle_credit(body: SettleIn):
         "credit_outstanding": db.get_credit_outstanding(),
         "wallet_balance": db.get_wallet_balance(),
     }
+
+
+class LiquidDepositIn(BaseModel):
+    amount: float
+    note: Optional[str] = None
+    txn_date: Optional[str] = None
+
+
+@app.post("/api/accounts/liquid-deposit")
+def api_liquid_deposit(body: LiquidDepositIn):
+    """Move money from the Wallet into the Liquid reserve — subtracts from
+    the Wallet balance, adds to Liquid. Auto-creates a default liquid-linked
+    category on first use so this never requires prior category setup."""
+    if body.amount <= 0:
+        raise HTTPException(400, "amount must be positive")
+    txn_id = db.deposit_to_liquid(body.amount, note=body.note, spent_on=body.txn_date, source="dashboard")
+    return {"ok": True, "id": txn_id, "wallet_balance": db.get_wallet_balance(), "liquid_balance": db.get_liquid_balance()}
 
 
 def _vehicle_gain(category, as_of_month):

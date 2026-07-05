@@ -96,6 +96,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/month — this month vs wallet & credit\n"
         "/insights — monthly insight bullets\n"
         "/income <amount> [note] — log money into your Wallet (salary, bonus, ...)\n"
+        "/liquid <amount> [note] — move money from Wallet into your Liquid fund\n"
         "/settle <amount> — pay down Credit from your Wallet\n"
         "/wallet — wallet/credit/liquid balances + payday status\n"
         "/salary <amount> — set your reference monthly income (for %-used displays)\n"
@@ -229,6 +230,27 @@ async def cmd_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"💰 +{_fmt_amount(amount)} added to Wallet{f' ({note})' if note else ''}. "
         f"New balance: {_fmt_amount(balance)}."
+    )
+
+
+async def cmd_liquid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /liquid <amount> [note], e.g. /liquid 5000 topping up emergency fund")
+        return
+    try:
+        amount = float(context.args[0].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("Usage: /liquid <amount> [note], e.g. /liquid 5000 topping up emergency fund")
+        return
+    note = " ".join(context.args[1:]) or None
+    db.deposit_to_liquid(amount, note=note, raw_message=update.message.text)
+    wallet_balance = db.get_wallet_balance()
+    liquid_balance = db.get_liquid_balance()
+    await update.message.reply_text(
+        f"💧 +{_fmt_amount(amount)} moved from Wallet to Liquid{f' ({note})' if note else ''}.\n"
+        f"Wallet: {_fmt_amount(wallet_balance)} · Liquid: {_fmt_amount(liquid_balance)}."
     )
 
 
@@ -382,6 +404,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("salary", cmd_salary))
     app.add_handler(CommandHandler("credit", cmd_credit))
     app.add_handler(CommandHandler("income", cmd_income))
+    app.add_handler(CommandHandler("liquid", cmd_liquid))
     app.add_handler(CommandHandler("settle", cmd_settle))
     app.add_handler(CommandHandler("wallet", cmd_wallet))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))

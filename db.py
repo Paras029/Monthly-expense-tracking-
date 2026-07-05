@@ -509,6 +509,35 @@ def get_liquid_balance(through_month=None):
         return deposits - withdrawals
 
 
+DEFAULT_LIQUID_CATEGORY = "Liquid Fund"
+
+
+def get_or_create_liquid_category():
+    """Returns the name of an account_link='liquid' category, creating a
+    default one (DEFAULT_LIQUID_CATEGORY) if none exists yet — so logging a
+    liquid deposit never requires the user to set up a category first."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT name FROM categories WHERE account_link = 'liquid' ORDER BY name LIMIT 1"
+        ).fetchone()
+        if row:
+            return row["name"]
+    add_category(DEFAULT_LIQUID_CATEGORY, "#818cf8", "saving", account_link="liquid")
+    return DEFAULT_LIQUID_CATEGORY
+
+
+def deposit_to_liquid(amount, note=None, raw_message=None, spent_on=None, source="telegram"):
+    """Move money from the Wallet into the Liquid reserve: a single
+    transaction that both counts against the Wallet (payment_source='wallet'
+    — real money left it) and deposits into the Liquid balance (its category
+    is account_link='liquid'). Returns the new transaction's id."""
+    category = get_or_create_liquid_category()
+    return insert_transaction(
+        category=category, note=note, amount=amount, raw_message=raw_message,
+        spent_on=spent_on, source=source, payment_source="wallet", expense_type="saving",
+    )
+
+
 def get_fixed_monthly_costs():
     """Latest logged instance of each distinct (category, note) pair tagged
     expense_type='fixed' cadence='monthly' — a snapshot of current fixed

@@ -42,11 +42,18 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
 - **Add income to your Wallet:** `/income 60000 July salary` on the bot, or
   "+ Add income" on the dashboard's Wallet & Accounts section. Your Wallet
   balance is the real running total — salary/bonus/freelance in, expenses out.
+- **Move money into your Liquid fund:** `/liquid 5000` on the bot, or "💧 Add
+  to Liquid" on the dashboard — subtracts from your Wallet, adds to Liquid.
 - **Settle your credit card:** `/settle 5000` on the bot, or "Settle credit"
-  on the dashboard — pays down Credit from your Wallet. Credit is revolving:
-  an unsettled balance carries into next month rather than resetting, and the
-  dashboard nags you with a banner once your payday (the 25th, or the last
-  working day before it) has passed with anything still outstanding.
+  on the dashboard — pays down Credit from your Wallet, freeing up your
+  credit limit. Credit is revolving: an unsettled balance carries into next
+  month rather than resetting, and the dashboard nags you with a banner once
+  your payday (the 25th, or the last working day before it) has passed with
+  anything still outstanding.
+- **"How much have I spent" is Wallet-only:** the donut, top category, and
+  projected month-end all reflect Wallet spend specifically — Credit and
+  Liquid are separate accounts with their own outstanding/limit and balance,
+  tracked in their own cards instead of inflating your day-to-day spend view.
 - **Set your reference income/credit limit:** `/salary 60000`, `/credit 20000` on the
   bot, or via the ⚙ Settings panel on the dashboard. `monthly_salary` is just
   a target for %-used displays — your Wallet's actual balance comes from
@@ -69,9 +76,20 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
 - **Export your data:** the ⬇ Export button in the dashboard header downloads
   a full-history Excel workbook (transactions, monthly summary, category
   breakdown, accounts ledger, investment history) for offline analysis.
+- **Ask the assistant:** the "💬 Ask about your finances" section can answer
+  questions about your spending, summarize or restructure any part of the
+  dashboard, and give basic guidance on investing/loans with pointers to
+  general resources — needs `GEMINI_API_KEY` set. It uses your dashboard's
+  aggregate data, never raw transactions, and costs one Gemini call per
+  message you send (nothing on typing or polling).
+- **Insights & Recap in one place:** today's snapshot, this month's insight
+  bullets, cross-month trend commentary (once you have a few months of
+  history), and the AI daily recap all live together in one dashboard
+  section instead of being scattered across the page.
 - **Bot commands:** `/start`, `/undo`, `/cat <Category>`, `/today`, `/month`,
-  `/insights`, `/income <amount> [note]`, `/settle <amount>`, `/wallet`,
-  `/salary <amount>`, `/credit <amount>`, `/portfolio <vehicle> <amount>`, `/recap`.
+  `/insights`, `/income <amount> [note]`, `/liquid <amount> [note]`,
+  `/settle <amount>`, `/wallet`, `/salary <amount>`, `/credit <amount>`,
+  `/portfolio <vehicle> <amount>`, `/recap`.
 
 ## Without a Telegram bot token
 

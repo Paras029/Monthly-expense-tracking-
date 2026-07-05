@@ -33,26 +33,50 @@
 <style>
   :root { color-scheme: dark; }
   body {
-    background: #0c0e14;
-    background-image: radial-gradient(ellipse 900px 500px at 20% -10%, rgba(245,158,11,0.10), transparent 60%),
-                       radial-gradient(ellipse 700px 400px at 100% 0%, rgba(56,189,248,0.06), transparent 55%);
+    background-color: #090a10;
+    background-image:
+      radial-gradient(ellipse 1000px 560px at 12% -8%, rgba(245,158,11,0.13), transparent 60%),
+      radial-gradient(ellipse 820px 520px at 102% 4%, rgba(56,189,248,0.10), transparent 58%),
+      radial-gradient(ellipse 760px 560px at 92% 62%, rgba(129,140,248,0.09), transparent 58%),
+      radial-gradient(ellipse 880px 620px at 6% 96%, rgba(52,211,153,0.08), transparent 58%),
+      radial-gradient(ellipse 900px 900px at 50% 45%, rgba(255,255,255,0.02), transparent 70%),
+      linear-gradient(180deg, #0a0c13, #08090e 45%, #0a0b11);
     background-attachment: fixed;
     color: #e7e8ee;
     font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    position: relative;
+  }
+  body::before {
+    /* faint grain for tactile depth, so large flat panels don't read as pure
+       flat color — a tiny inlined SVG noise filter, no external asset */
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.05;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
   .font-display { font-family: 'Fraunces', ui-serif, Georgia, serif; }
   .tnum { font-variant-numeric: tabular-nums; }
   .card {
-    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
-    background-color: #151822;
+    background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0) 40%);
+    background-color: #12141d;
     border: 1px solid #262a38;
     border-radius: 1rem;
-    transition: border-color 0.15s ease, transform 0.15s ease;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 10px 30px -14px rgba(0,0,0,0.55);
+    transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   }
-  .card-accent { position: relative; overflow: hidden; }
+  .card-accent { position: relative; z-index: 0; overflow: hidden; }
   .card-accent::before {
     content: ''; position: absolute; inset: 0 0 auto 0; height: 2px;
-    background: var(--accent, #f59e0b); opacity: 0.85;
+    background: var(--accent, #f59e0b); opacity: 0.85; z-index: 1;
+  }
+  .card-accent::after {
+    content: ''; position: absolute; inset: -40% auto auto -30%; width: 65%; height: 65%;
+    background: var(--accent, #f59e0b); opacity: 0.06; filter: blur(40px); border-radius: 50%;
+    pointer-events: none; z-index: -1;
   }
   ::-webkit-scrollbar { height: 6px; width: 6px; }
   ::-webkit-scrollbar-thumb { background: #2a2e3f; border-radius: 4px; }
@@ -99,7 +123,8 @@
     <nav class="flex gap-1 overflow-x-auto -mx-1 px-1 border-y border-[#1b1e29] py-1.5">
       <a href="#sec-summary" class="navpill">Overview</a>
       <a href="#sec-spending" class="navpill">Spending</a>
-      <a href="#sec-recap" class="navpill">Daily recap</a>
+      <a href="#sec-recap" class="navpill">Insights &amp; Recap</a>
+      <a href="#sec-chat" class="navpill">Assistant</a>
       <a href="#sec-burn" class="navpill">Daily burn</a>
       <a href="#sec-trends" class="navpill">Trends</a>
       <a href="#sec-oneoff" class="navpill">One-off</a>
@@ -152,7 +177,6 @@
     <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
       <h2 class="font-display text-lg">Where the money goes</h2>
       <div id="spend-view-toggle" class="flex gap-1 flex-wrap text-xs">
-        <button data-view="all" class="view-pill px-2.5 py-1 rounded-full">All spend</button>
         <button data-view="wallet" class="view-pill px-2.5 py-1 rounded-full">💰 Wallet</button>
         <button data-view="credit" class="view-pill px-2.5 py-1 rounded-full">💳 Credit</button>
         <button data-view="saving" class="view-pill px-2.5 py-1 rounded-full">📈 Savings</button>
@@ -187,20 +211,40 @@
     </div>
   </section>
 
-  <!-- Spending insights -->
-  <section class="card p-4 sm:p-5">
-    <h2 class="font-display text-lg mb-3">Spending insights</h2>
-    <ul id="insights-list" class="space-y-2.5 text-sm"></ul>
-  </section>
-
-  <!-- AI daily recap -->
+  <!-- Insights & Recap (merged: today / this month / trends / AI recap) -->
   <section id="sec-recap" class="card p-4 sm:p-5">
-    <div class="flex items-center justify-between mb-1">
-      <h2 class="font-display text-lg">✨ Daily recap</h2>
+    <h2 class="font-display text-lg mb-4">📊 Insights &amp; Recap</h2>
+
+    <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+      <p class="text-[11px] text-muted uppercase tracking-wider">Today</p>
+      <p id="today-summary" class="text-sm tnum">—</p>
+    </div>
+
+    <p class="text-[11px] text-muted uppercase tracking-wider mb-2 pt-3 border-t stat-divider">This month</p>
+    <ul id="insights-list" class="space-y-2.5 text-sm mb-4"></ul>
+
+    <div id="trends-block" class="hidden">
+      <p class="text-[11px] text-muted uppercase tracking-wider mb-2 pt-3 border-t stat-divider">Trends</p>
+      <ul id="trends-list" class="space-y-2.5 text-sm mb-4"></ul>
+    </div>
+
+    <div class="flex items-center justify-between mb-1 pt-3 border-t stat-divider">
+      <p class="text-[11px] text-muted uppercase tracking-wider">✨ AI recap</p>
       <button id="refresh-recap" class="text-xs icon-btn card px-2 py-1">↻ Refresh</button>
     </div>
     <p id="recap-source" class="text-xs text-muted mb-2"></p>
     <ul id="recap-list" class="space-y-2.5 text-sm"></ul>
+  </section>
+
+  <!-- Chat assistant -->
+  <section id="sec-chat" class="card p-4 sm:p-5">
+    <h2 class="font-display text-lg mb-1">💬 Ask about your finances</h2>
+    <p class="text-xs text-muted mb-3">Ask about your spending, get a summary, or basic guidance on saving/investing/loans. Uses your dashboard data, not raw transactions — general education, not professional advice.</p>
+    <div id="chat-messages" class="space-y-3 text-sm mb-3 max-h-80 overflow-y-auto"></div>
+    <div class="flex gap-2">
+      <input id="chat-input" type="text" placeholder="e.g. How much did I spend on food this month?" class="flex-1 px-3 py-2 text-sm" />
+      <button id="chat-send" class="btn-primary text-sm rounded-lg px-4 py-2 whitespace-nowrap">Send</button>
+    </div>
   </section>
 
   <!-- Daily burn -->
@@ -262,12 +306,13 @@
   <section id="sec-accounts" class="card p-4 sm:p-5">
     <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
       <h2 class="font-display text-lg">Wallet &amp; Accounts</h2>
-      <div class="flex gap-2">
+      <div class="flex gap-2 flex-wrap">
         <button id="open-add-income" class="text-xs icon-btn card px-2 py-1">+ Add income</button>
+        <button id="open-add-liquid" class="text-xs icon-btn card px-2 py-1">💧 Add to Liquid</button>
         <button id="open-settle-credit" class="text-xs icon-btn card px-2 py-1">Settle credit</button>
       </div>
     </div>
-    <p class="text-xs text-muted mb-4">Wallet and Liquid carry a running balance month to month. Credit is revolving — unsettled usage stays outstanding until you settle it.</p>
+    <p class="text-xs text-muted mb-4">Wallet and Liquid carry a running balance month to month. Credit is revolving — unsettled usage stays outstanding until you settle it. Moving money to Liquid or settling Credit both draw from your Wallet balance.</p>
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
       <div class="border border-[#262a38] rounded-xl p-3">
         <p class="text-[11px] text-muted uppercase tracking-wider">Wallet balance</p>
@@ -432,6 +477,22 @@
   </div>
 </div>
 
+<!-- Add to Liquid modal -->
+<div id="add-liquid-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
+  <div class="card p-5 w-full max-w-sm">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-display text-lg">Add to Liquid fund</h3>
+      <button class="add-liquid-close icon-btn text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mb-3">Moves money from your Wallet into your Liquid reserve — reduces the Wallet balance, increases Liquid.</p>
+    <label class="block text-xs text-muted mb-1">Amount (₹)</label>
+    <input id="liquid-amount" type="number" class="w-full px-3 py-2 text-sm mb-3" />
+    <label class="block text-xs text-muted mb-1">Note (optional)</label>
+    <input id="liquid-note" type="text" placeholder="e.g. topping up emergency fund" class="w-full px-3 py-2 text-sm mb-4" />
+    <button id="save-liquid" class="w-full btn-primary text-sm rounded-lg py-2">Add to Liquid</button>
+  </div>
+</div>
+
 <!-- Settle credit modal -->
 <div id="settle-credit-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
   <div class="card p-5 w-full max-w-sm">
@@ -540,11 +601,11 @@ if (chartsAvailable()) {
 
 let donutChart, burnChart, monthlyChart, savingsChart, investmentsChart;
 let selectedCategory = '';
-let selectedSpendView = 'all';
+let selectedSpendView = 'wallet';
 let categoryColorMap = {};
 let categoriesCache = [];
 
-const VIEW_LABELS = { all: 'Total', wallet: 'From wallet', credit: 'From credit', saving: 'Savings', liquid: 'Liquid fund' };
+const VIEW_LABELS = { wallet: 'Wallet spend', credit: 'From credit', saving: 'Savings', liquid: 'Liquid fund' };
 
 async function fetchJSON(path, params) {
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -659,6 +720,12 @@ async function loadSummary(month, view) {
 
 async function loadInsights(month) {
   const data = await fetchJSON('/api/insights', { month });
+
+  const today = data.today;
+  document.getElementById('today-summary').textContent = today.count
+    ? `${fmtINR(today.total)} across ${today.count} transaction${today.count === 1 ? '' : 's'}${today.top_category ? ' · ' + today.top_category : ''}`
+    : 'Nothing logged yet today.';
+
   const list = document.getElementById('insights-list');
   list.innerHTML = data.insights.map(i => `
     <li class="flex items-start gap-2">
@@ -666,6 +733,20 @@ async function loadInsights(month) {
       <span>${i.text}</span>
     </li>
   `).join('') || '<li class="text-muted">Not enough data yet for insights.</li>';
+
+  const trendsBlock = document.getElementById('trends-block');
+  const trendsList = document.getElementById('trends-list');
+  if (data.trends && data.trends.length) {
+    trendsBlock.classList.remove('hidden');
+    trendsList.innerHTML = data.trends.map(t => `
+      <li class="flex items-start gap-2">
+        <span class="${statusColor(t.status)}">${statusIcon(t.status)}</span>
+        <span>${t.text}</span>
+      </li>
+    `).join('');
+  } else {
+    trendsBlock.classList.add('hidden');
+  }
 }
 
 function renderRecap(result) {
@@ -1209,6 +1290,56 @@ document.getElementById('category-filter').addEventListener('change', (e) => {
   loadMonthly(month, selectedCategory);
 });
 
+// ---- Chat assistant -------------------------------------------------------
+
+let chatHistory = []; // [{role: 'user'|'model', text}] — client-side only, capped
+
+function renderChatMessage(role, text) {
+  const messages = document.getElementById('chat-messages');
+  const bubble = document.createElement('div');
+  bubble.className = role === 'user'
+    ? 'ml-auto max-w-[85%] bg-amber-500/15 border border-amber-500/30 rounded-xl rounded-br-sm px-3 py-2 whitespace-pre-wrap'
+    : 'mr-auto max-w-[85%] bg-[#1b1e29] border border-[#262a38] rounded-xl rounded-bl-sm px-3 py-2 whitespace-pre-wrap';
+  bubble.textContent = text;
+  messages.appendChild(bubble);
+  messages.scrollTop = messages.scrollHeight;
+  return bubble;
+}
+
+async function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  renderChatMessage('user', message);
+
+  const sendBtn = document.getElementById('chat-send');
+  sendBtn.disabled = true;
+  const thinking = renderChatMessage('model', '…thinking');
+
+  try {
+    const month = monthPicker.value || currentMonthStr();
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history: chatHistory, month }),
+    });
+    const data = await res.json();
+    thinking.textContent = data.reply;
+    chatHistory.push({ role: 'user', text: message }, { role: 'model', text: data.reply });
+    if (chatHistory.length > 16) chatHistory = chatHistory.slice(-16); // cap token growth
+  } catch (e) {
+    thinking.textContent = 'Something went wrong — please try again.';
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
+document.getElementById('chat-send').addEventListener('click', sendChatMessage);
+document.getElementById('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChatMessage();
+});
+
 // ---- Settings modal ----------------------------------------------------
 
 const settingsModal = document.getElementById('settings-modal');
@@ -1262,6 +1393,32 @@ document.getElementById('save-income').addEventListener('click', async () => {
   });
   addIncomeModal.classList.add('hidden');
   addIncomeModal.classList.remove('flex');
+  loadAll();
+});
+
+const addLiquidModal = document.getElementById('add-liquid-modal');
+function openAddLiquidModal() {
+  document.getElementById('liquid-amount').value = '';
+  document.getElementById('liquid-note').value = '';
+  addLiquidModal.classList.remove('hidden');
+  addLiquidModal.classList.add('flex');
+}
+document.getElementById('open-add-liquid').addEventListener('click', openAddLiquidModal);
+document.querySelectorAll('.add-liquid-close').forEach(el => el.addEventListener('click', () => {
+  addLiquidModal.classList.add('hidden');
+  addLiquidModal.classList.remove('flex');
+}));
+document.getElementById('save-liquid').addEventListener('click', async () => {
+  const amount = parseFloat(document.getElementById('liquid-amount').value);
+  if (isNaN(amount) || amount <= 0) return;
+  const note = document.getElementById('liquid-note').value.trim() || null;
+  await fetch('/api/accounts/liquid-deposit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount, note }),
+  });
+  addLiquidModal.classList.add('hidden');
+  addLiquidModal.classList.remove('flex');
   loadAll();
 });
 

@@ -78,6 +78,7 @@ expense-tracker/
 ├── parser.py            # regex-first parse + Gemini fallback classify
 ├── insights.py          # compute metrics + phrase insight bullets (no Gemini)
 ├── ai_insights.py       # AI daily recap: cached, ~1 Gemini call/day, rule-based fallback
+├── chat.py              # chat assistant: 1 Gemini call/message, compact context, capped history
 ├── export.py            # multi-sheet Excel export (openpyxl), reads db.py only
 ├── bot.py               # Telegram handlers  ← ONLY file to swap for WhatsApp
 ├── server.py            # FastAPI app + JSON API + serves dashboard
@@ -229,7 +230,24 @@ of truth for what you actually have:
   `account_link` routes it into the Liquid balance too). Withdrawals are any expense
   with `payment_source='liquid'` — this is where `one-off` anomalies should ideally be
   paid from. Balance = `db.get_liquid_balance()`: cumulative deposits minus cumulative
-  liquid-paid withdrawals.
+  liquid-paid withdrawals. `db.deposit_to_liquid()` (`/liquid <amount>` / dashboard "💧
+  Add to Liquid") is the dedicated way to move money in: it inserts one transaction
+  with `payment_source='wallet'` (so it correctly reduces the Wallet balance) into a
+  liquid-linked category (so it correctly increases the Liquid balance) — auto-creating
+  a default "Liquid Fund" category via `db.get_or_create_liquid_category()` on first
+  use so this never requires setting one up first.
+
+**"Expenditure" is evaluated against the Wallet only.** Credit and Liquid are separate
+accounts with their own ceiling/balance (`credit_outstanding` vs `credit_limit`,
+`liquid_balance`) — blending their spend into "how much have I spent this month" would
+overstate what's actually coming out of your salary/wallet. `insights.compute_metrics()`
+scopes `spend_total`/`fixed_total`/`variable_total`/`top_category`/`projected` to
+`payment_source='wallet'` transactions only (excluding `saving`); the "Where the money
+goes" donut's default view (§8) is Wallet spend for the same reason, with separate
+Credit/Liquid/Saving toggle views alongside it rather than one blended "All" view. The
+one exception is `oneoff_total` (and the one-off insight bullet): that's computed across
+*all* payment sources deliberately, since its whole purpose is flagging anomalous spend
+and nudging it toward Liquid regardless of which account it actually hit.
 
 **Payday / settlement reminder:** `insights.payday_date()` computes the 25th of the
 current month, or the last working day (Mon–Fri) before it if the 25th falls on a
@@ -401,6 +419,7 @@ user id (the bot is public once created; this keeps strangers from injecting dat
 | `/month`            | quick text summary of this month vs wallet & credit           |
 | `/insights`         | run + send the monthly insight bullets (see §9)               |
 | `/income <amount> [note]` | log a deposit into the Wallet (salary, bonus, freelance, ...)      |
+| `/liquid <amount> [note]` | move money from the Wallet into the Liquid fund                  |
 | `/settle <amount>`  | pay down Credit from the Wallet (no arg = show outstanding)     |
 | `/wallet`           | Wallet/Credit/Liquid balances + payday settlement status       |
 | `/salary <amount>`  | set the *reference* monthly income used for %-used displays (no arg = show current value) |
@@ -419,7 +438,15 @@ re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rup
 A horizontal quick-nav pill bar under the header anchor-jumps between sections, since
 the page has grown long. Headings use a serif display face (Fraunces, Google Fonts CDN)
 against an Inter sans body — falls back to system serif/sans if the font CDN is
-unreachable, a pure-CSS fallback with no JS failure mode (unlike Chart.js/Tailwind).
+unreachable, a pure-CSS fallback with no JS failure mode (unlike Chart.js/Tailwind). The
+page background is a multi-layer radial-gradient wash (amber/sky/indigo/emerald, tying
+to each summary card's own accent color) plus a faint inlined-SVG noise texture on a
+`position:fixed` `body::before` — deliberately more than a flat single color/gradient so
+large panels don't read as plain black/grey; `.card`/`.card-accent` carry a soft drop
+shadow and a low-opacity blurred corner glow (behind their content via an explicit
+stacking context, `z-index:-1` on the glow) for a bit of depth. No external image
+assets — everything is CSS/inline-SVG so it degrades gracefully if the Tailwind/font
+CDNs are unreachable.
 
 **Sections (top to bottom):**
 
@@ -444,20 +471,37 @@ unreachable, a pure-CSS fallback with no JS failure mode (unlike Chart.js/Tailwi
    backing box behind the center label so a hovering tooltip never visually blends with
    it — a real bug fixed this round), legend list of categories with amount + %, plus
    *Top category* and *Projected month-end* as inline stats below the legend. A
-   pill-button toggle above the chart re-slices the same month by **All spend**
-   (default — excludes `expense_type='saving'`, the usual spend-pattern view),
-   **Wallet**, **Credit**, **Liquid** (by `payment_source`), or **Savings** (by
-   investment-vehicle contributions) — `GET /api/summary?view=` returns a
-   `breakdown`/`view_total` scoped to whichever slice is selected, so percentages are
+   pill-button toggle above the chart re-slices the same month by **Wallet** (default —
+   excludes `expense_type='saving'`; this *is* the "how much have I spent" view, scoped
+   to the Wallet only per §5b — there's deliberately no separate "All spend" option
+   blending Credit/Liquid back in), **Credit**, **Liquid** (by `payment_source`), or
+   **Savings** (by investment-vehicle contributions) — `GET /api/summary?view=` returns
+   a `breakdown`/`view_total` scoped to whichever slice is selected, so percentages are
    always against that slice's own total, not the whole month's spend.
 
-3. **Spending insights** — bullet list from `insights.py` (see §9). Small status icon
-   per bullet (✓ good / ⚠ watch / → note).
+3. **📊 Insights & Recap** — a single merged section (was two separate cards: monthly
+   insights and the AI daily recap) spanning daily/monthly/overall views, so all the
+   "how am I doing" narrative lives in one place instead of scattered across the page:
+   - **Today** — a one-line deterministic snapshot (`GET /api/insights`'s `today`
+     field): total spent + transaction count + top category, no Gemini involved.
+   - **This month** — the existing bullet list from `insights.build_insights()` (see
+     §9). Small status icon per bullet (✓ good / ⚠ watch / → note).
+   - **Trends** — `insights.build_trend_insights()` (see §9): deterministic
+     cross-month commentary (pace vs trailing average, category streaks, budget
+     streaks) that only appears once there's enough history to compare against (hidden
+     entirely on a fresh install rather than fabricating a trend from nothing).
+   - **✨ AI recap** — unchanged from before: AI-generated (or rule-based fallback)
+     day-by-day + cumulative analysis from `ai_insights.py` (see §9). Loads the cached
+     recap for today on page load (zero extra Gemini calls); a "↻ Refresh" button
+     force-regenerates. Shows which source produced it (`AI-generated` vs `Rule-based
+     fallback`) and a timestamp.
 
-3b. **✨ Daily recap** — AI-generated (or rule-based fallback) day-by-day + cumulative
-   analysis from `ai_insights.py` (see §9). Loads the cached recap for today on page
-   load (zero extra Gemini calls); a "↻ Refresh" button force-regenerates. Shows which
-   source produced it (`AI-generated` vs `Rule-based fallback`) and a timestamp.
+3b. **💬 Ask about your finances** — a small chat window (`chat.py`, see §9b) for
+   expense Q&A, dashboard summaries, and basic financial literacy guidance (investing
+   basics, loan considerations, pointers to general resources). One Gemini call per
+   submitted message — never per keystroke, never polled — with a compact pre-computed
+   data snapshot (never raw transactions) and a client-capped conversation history so
+   token usage per call stays bounded through a long session.
 
 4. **Daily burn** — line chart: cumulative spend per day vs a straight dashed
    even-pace reference line. A category dropdown (shared with §5's Month over month
@@ -498,8 +542,9 @@ unreachable, a pure-CSS fallback with no JS failure mode (unlike Chart.js/Tailwi
 
 8. **Wallet & Accounts** — the three account balances (Wallet/Credit/Liquid) as small
    stat tiles, a "+ Add income" button (logs a Wallet deposit — salary, bonus,
-   freelance), a "Settle credit" button (pays down Credit from Wallet), and a recent
-   ledger of `account_transactions` (income + settlements, colored green/red for
+   freelance), a "💧 Add to Liquid" button (`db.deposit_to_liquid()` — moves money from
+   Wallet into Liquid), a "Settle credit" button (pays down Credit from Wallet), and a
+   recent ledger of `account_transactions` (income + settlements, colored green/red for
    in/out). This is the wallet/accounts concept made visible and editable from the
    dashboard, not just via Telegram commands.
 
@@ -554,10 +599,11 @@ plain JSON, since none of that depends on the chart library being present.
 
 **API endpoints (`server.py`, all accept `?month=YYYY-MM`, default current):**
 ```
-GET  /api/summary                        -> cards (incl. wallet/savings/liquid balances, credit outstanding) + category breakdown + pace + insights inputs; ?view=all|wallet|credit|saving|liquid re-slices the breakdown
-GET  /api/insights                       -> list of insight bullet strings + status
+GET  /api/summary                        -> cards (incl. wallet/savings/liquid balances, credit outstanding) + category breakdown + pace + insights inputs; ?view=wallet|credit|saving|liquid re-slices the breakdown (default 'wallet')
+GET  /api/insights                       -> {today, insights, trends} — today's snapshot + monthly bullets (§9) + cross-month trend bullets (§9)
 GET  /api/recap                          -> cached AI daily recap {lines, source, generated_at}
 POST /api/recap/refresh                  -> force-regenerate today's recap (bypasses cache)
+POST /api/chat                           -> chat assistant reply {message, history: [{role, text}], month} -> {reply, source} (see §9b)
 GET  /api/daily-burn                     -> [{day, cumulative}], plus reference-line params; ?category= to filter
 GET  /api/monthly                        -> last 6 months total outflow; ?category= to filter to one category
 GET  /api/savings                        -> last 6 months total for real investment-vehicle (expense_type='saving', no account_link) categories
@@ -565,6 +611,7 @@ GET  /api/oneoff                         -> this month's expense_type='one-off' 
 GET  /api/accounts                       -> {wallet_balance, credit_outstanding, credit_limit, credit_available, liquid_balance, payday, needs_settlement}
 GET  /api/accounts/transactions          -> income/settlement ledger; ?account=wallet|credit to filter
 POST /api/accounts/income                -> log a Wallet deposit {amount, note, txn_date}
+POST /api/accounts/liquid-deposit        -> move money Wallet -> Liquid {amount, note, txn_date}
 POST /api/accounts/settle                -> pay down Credit from Wallet {amount, note, txn_date}
 GET  /api/investments                    -> per-vehicle {vehicles: [...], combined_months, total_contributed, total_value, total_gain}
 POST /api/investments                    -> upsert {category, month, value, note} snapshot for one vehicle
@@ -596,15 +643,25 @@ transaction's own `expense_type` — no join to `categories` needed for this, si
 tag lives on the transaction itself (a category's `expense_type` is only ever a
 *default* for new transactions, not authoritative for past ones).
 
+**`spend_total`/`fixed_total`/`variable_total`/`top_category` are scoped to
+`payment_source='wallet'`** (see §5b) — Credit and Liquid are separate accounts with
+their own ceiling/balance, so a credit-paid dinner or a liquid-paid anomaly shouldn't
+inflate "how much have I spent this month." `oneoff_total`/`oneoff_from_liquid`/
+`largest_oneoff` are the one deliberate exception: computed across *all* payment
+sources, since flagging an anomaly and nudging it toward Liquid only works if you can
+see it regardless of which account it actually hit.
+
 `projected` (and the dashboard's `pace_per_day`) only pace the **variable** portion of
-spend across the month — `fixed_total + savings_total + (variable_total ÷ days_elapsed
-× days_total)`. Fixed costs and a SIP contribution are lump sums already logged in full
-for the month; they don't recur again before month-end, so extrapolating them by
-days-elapsed would fabricate a spike (e.g. rent paid in full on day 1 previously
+Wallet spend across the month — `fixed_total + savings_total + (variable_total ÷
+days_elapsed × days_total)`. Fixed costs and a SIP contribution are lump sums already
+logged in full for the month; they don't recur again before month-end, so extrapolating
+them by days-elapsed would fabricate a spike (e.g. rent paid in full on day 1 previously
 projected the whole month at a ₹21,500/day pace). **`oneoff_total` is excluded
 entirely** — a one-time trip isn't a pattern that continues for the rest of the month,
-and including it would make an otherwise-ordinary month look like a blowout. Only the
-actual day-to-day variable spend is paced forward.
+and including it would make an otherwise-ordinary month look like a blowout. `budget`
+(the on-pace ceiling) is `monthly_salary` alone now too — no longer `+ credit_limit` —
+for the same reason: Credit has its own ceiling, it isn't additional room in the
+Wallet's own budget.
 
 `credit_outstanding` (and the "close to the limit" warning) is **cumulative, not
 month-scoped** — `db.get_credit_outstanding(through_month=month)` — since Credit is
@@ -615,8 +672,8 @@ actually leaves you. `insights.payday_date()` / `insights.credit_settlement_stat
 `/api/accounts`.
 
 **Metrics to compute** (mirror the reference insights):
-- On-pace check: projected month-end vs (reference monthly income + credit_limit) →
-  "On pace for ₹X, under/over your ₹Y salary + credit."
+- On-pace check: projected month-end vs the reference monthly income → "On pace for
+  ₹X, under/over your ₹Y salary/wallet budget."
 - Credit warning: if credit_outstanding ≥ 80% of credit_limit → "Credit outstanding is
   ₹X of ₹Y — getting close to the limit."
 - Payday settlement nag: if `credit_settlement_status().needs_settlement` → "₹X in
@@ -636,6 +693,27 @@ actually leaves you. `insights.payday_date()` / `insights.credit_settlement_stat
   this month."
 
 Return a list of `{text, status}` where status ∈ `good | watch | note`.
+
+### Trend insights (`insights.build_trend_insights()`)
+
+Deterministic cross-month pattern commentary — zero Gemini calls, just re-running
+`compute_metrics()` against each of the last `lookback` (default 3) months and
+comparing. Feeds the merged Insights & Recap section's "Trends" block (§8), which
+hides itself entirely when this returns `[]`:
+
+- **Not enough history → `[]`.** Needs at least 2 prior months with any logged
+  transactions; a fresh install or a brand-new second month never fabricates a trend
+  out of nothing.
+- **Pace vs trailing average:** `projected` this month vs the average `spend_total`
+  of the prior months, once `days_elapsed >= 5` (comparing on day 1-2 against a full
+  prior month always looks artificially "down," so it's skipped that early). Only
+  surfaces if the gap is ≥10%.
+- **Category streak:** if the same category has been `top_category` for 3+ consecutive
+  months (including this one), names it — a persistent pattern is worth calling out
+  differently from a one-off spike.
+- **Budget streak:** the longest run (ending this month) of `projected` staying on one
+  side of `budget` — 3+ consecutive months over flags a watch-status bullet, 3+ under
+  flags a good-status one.
 
 ### AI daily recap (`ai_insights.py`)
 
@@ -665,6 +743,40 @@ replacement for the deterministic insights above.
 - **Fallback:** if `GEMINI_API_KEY` is unset or the call fails for any reason, silently
   fall back to `insights.build_insights()` (still cached, tagged `source: 'fallback'` so
   the UI can show which one it got) — the recap card and `/recap` command never error out.
+
+### 9b. Chat assistant (`chat.py`)
+
+The third and last Gemini call site. Unlike the daily recap (capped at ~once/day,
+cached), the chat assistant calls Gemini **once per user-submitted message** — there's
+no cheaper way to answer an open-ended question — so the design leans hard on keeping
+each call small rather than reducing call frequency further:
+
+- **What it's for:** answering questions about the user's spending/budget/savings/
+  accounts, summarizing or restructuring a view of the dashboard on request, and basic
+  financial literacy guidance (how someone might start investing, what to weigh before
+  a loan for a big purchase) — framed as general education, not individualized
+  professional advice, with pointers to well-known general resources (SEBI/RBI investor
+  education, Zerodha Varsity) rather than specific stock/product recommendations.
+- **Data sent to Gemini** (`chat._gather_financial_context`): the same kind of compact
+  pre-computed aggregates as the daily recap — this month's spend split, accounts
+  balances, the last 6 months' totals, the category list (name/type/cap), which
+  categories are over cap, and each investment vehicle's latest value. **Never raw
+  transactions** — keeps the payload small and never exposes more line-item detail than
+  the dashboard itself already aggregates.
+- **Conversation history:** the app has no server-side chat storage — the browser holds
+  `chatHistory` (capped to the last 16 entries / 8 exchanges client-side) and replays it
+  on every request via `POST /api/chat`'s `history` field, since Gemini's
+  `generateContent` is stateless per call and needs the full turn sequence to maintain
+  context. `chat._build_contents()` injects the data snapshot once, as part of the
+  first turn, rather than repeating a system-prompt-sized block on every message.
+- **Efficiency:** exactly one Gemini call per message the user actually sends — nothing
+  fires on typing, focus, or a timer. `parser.call_gemini()` gained an optional
+  `contents` param (a pre-built multi-turn list) to support this multi-turn shape
+  without duplicating the REST-call plumbing that already exists for the single-turn
+  category-classification and daily-recap call sites.
+- **Fallback:** if `GEMINI_API_KEY` is unset, replies with a plain message explaining
+  how to enable it (no wasted call); if the Gemini call itself fails, replies with a
+  short "try again" message instead of erroring the whole chat window out.
 
 ---
 
@@ -754,10 +866,8 @@ bash run.sh
   `PUT /api/transactions/{id}` (§8). `/cat` and `/undo` remain the quick bot-side
   corrections for the *last* transaction only; there's no bot command to edit an
   arbitrary past row.
-- **Combined insights/recap view + a chatbot window** — deliberately **not yet built**.
-  The plan is to merge §3's deterministic insights and §3b's AI daily recap into one
-  view spanning daily/monthly/overall trends, plus a small Gemini-backed chat window
-  that can answer free-form questions over the full ledger (via the same aggregates
-  `ai_insights.py` already computes, or the Excel export). Explicitly sequenced *after*
-  every other UI/data-model piece in this file is settled, so it isn't built on moving
-  ground — don't start it until asked.
+- **Chat conversation persistence** — the chat assistant (§9b) deliberately keeps no
+  server-side history; a page refresh loses the conversation. Adding a `chat_messages`
+  table would be a reasonable follow-up if that turns out to matter in practice, but
+  isn't built now — the app has otherwise had zero persistent-history tables and this
+  would be the first, so it's worth waiting for an actual need rather than guessing.

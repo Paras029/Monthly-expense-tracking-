@@ -18,14 +18,19 @@ GEMINI_MODEL = "gemini-3.5-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 
-def call_gemini(prompt, temperature=0.0):
+def call_gemini(prompt, temperature=0.0, contents=None):
     """Plain REST call to the Gemini API — deliberately not the official
     google-genai SDK. That SDK pulls in google-auth -> cryptography, a
     package with compiled Rust native code; on Termux the PyPI wheel for
     cryptography is built for glibc and fails to dlopen against Android's
     Bionic libc. We only need API-key auth (no OAuth/JWT), so a bare HTTPS
     POST via `requests` avoids that whole native-dependency chain — also
-    used by ai_insights.py, the app's other Gemini call site.
+    used by ai_insights.py and chat.py, the app's other Gemini call sites.
+
+    Pass a plain string `prompt` for the common single-turn case (wrapped
+    automatically), or a pre-built multi-turn `contents` list (`[{"role":
+    "user"|"model", "parts": [{"text": ...}]}, ...]`) for chat.py's
+    conversation history — `prompt` is ignored when `contents` is given.
 
     Returns the response text, or None if no API key is configured. Raises
     on any HTTP/parsing error — callers are expected to catch and fall back.
@@ -33,11 +38,12 @@ def call_gemini(prompt, temperature=0.0):
     if not config.GEMINI_API_KEY:
         return None
 
+    payload_contents = contents if contents is not None else [{"parts": [{"text": prompt}]}]
     resp = requests.post(
         GEMINI_URL,
         headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
         json={
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": payload_contents,
             "generationConfig": {"temperature": temperature},
         },
         timeout=20,

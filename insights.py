@@ -53,7 +53,11 @@ def compute_metrics(month):
 
     monthly_salary = float(db.get_setting("monthly_salary", 0))  # a reference/expected income target, not the wallet's real balance
     credit_limit = float(db.get_setting("credit_limit", 0))
-    budget = monthly_salary + credit_limit
+    # Credit and Liquid are separate accounts with their own ceilings/balances
+    # (credit_limit/credit_outstanding, liquid_balance) — the budget you're
+    # actually spending against day to day is your salary/wallet alone, so
+    # credit_limit is deliberately not added in here.
+    budget = monthly_salary
 
     total = sum(t["amount"] for t in txns)
     wallet_used = sum(t["amount"] for t in txns if t["payment_source"] == "wallet")
@@ -72,11 +76,14 @@ def compute_metrics(month):
         by_category.setdefault(t["category"], 0.0)
         by_category[t["category"]] += t["amount"]
 
-    # "spend" excludes expense_type='saving' (e.g. a SIP) — money that left
-    # the account still counts fully against wallet/credit/liquid above, but
-    # the "where the money goes" donut and top-category card are about
-    # spending habits, not saving contributions.
-    spend_txns = [t for t in txns if t["expense_type"] != "saving"]
+    # "spend" is scoped to the Wallet only, excluding expense_type='saving'
+    # (e.g. a SIP): Credit and Liquid are separate accounts with their own
+    # balances/ceilings (credit_outstanding vs credit_limit, liquid_balance),
+    # so blending their spend into "how much have I spent" would overstate
+    # what's actually coming out of your salary/wallet this month — the
+    # "where the money goes" donut, top-category card, and projected pace
+    # are all about wallet spending habits specifically.
+    spend_txns = [t for t in txns if t["expense_type"] != "saving" and t["payment_source"] == "wallet"]
     by_category_spend = {}
     for t in spend_txns:
         by_category_spend[t["category"]] = by_category_spend.get(t["category"], 0.0) + t["amount"]
@@ -95,12 +102,18 @@ def compute_metrics(month):
     # what "cutting X%" / "largest single hit" insights should be based on.
     fixed_txns = [t for t in spend_txns if t["expense_type"] == "fixed"]
     variable_txns = [t for t in spend_txns if t["expense_type"] == "variable"]
-    oneoff_txns = [t for t in spend_txns if t["expense_type"] == "one-off"]
 
     fixed_total = sum(t["amount"] for t in fixed_txns)
     variable_total = sum(t["amount"] for t in variable_txns)
-    oneoff_total = sum(t["amount"] for t in oneoff_txns)
-    oneoff_from_liquid = sum(t["amount"] for t in oneoff_txns if t["payment_source"] == "liquid")
+
+    # One-off anomaly tracking deliberately looks at *all* payment sources,
+    # not just wallet — the whole point is to flag anomalous spend and nudge
+    # toward paying it from Liquid, regardless of which account it actually
+    # hit; scoping this to wallet-only would hide the well-behaved case
+    # (already paid from Liquid) as well as any paid by Credit.
+    all_oneoff_txns = [t for t in txns if t["expense_type"] == "one-off"]
+    oneoff_total = sum(t["amount"] for t in all_oneoff_txns)
+    oneoff_from_liquid = sum(t["amount"] for t in all_oneoff_txns if t["payment_source"] == "liquid")
 
     variable_by_category = {}
     for t in variable_txns:
@@ -113,7 +126,7 @@ def compute_metrics(month):
     top_variable_pct = (top_variable_amount / variable_total * 100) if variable_total else 0.0
 
     largest = max(variable_txns, key=lambda t: t["amount"]) if variable_txns else None
-    largest_oneoff = max(oneoff_txns, key=lambda t: t["amount"]) if oneoff_txns else None
+    largest_oneoff = max(all_oneoff_txns, key=lambda t: t["amount"]) if all_oneoff_txns else None
 
     savings_total = sum(t["amount"] for t in txns if t["expense_type"] == "saving")
 
@@ -169,12 +182,12 @@ def build_insights(month):
     if m["budget"]:
         if m["projected"] <= m["budget"]:
             bullets.append({
-                "text": f"On pace for ₹{m['projected']:,.0f}, under your ₹{m['budget']:,.0f} salary + credit.",
+                "text": f"On pace for ₹{m['projected']:,.0f}, under your ₹{m['budget']:,.0f} salary/wallet budget.",
                 "status": "good",
             })
         else:
             bullets.append({
-                "text": f"On pace for ₹{m['projected']:,.0f}, over your ₹{m['budget']:,.0f} salary + credit.",
+                "text": f"On pace for ₹{m['projected']:,.0f}, over your ₹{m['budget']:,.0f} salary/wallet budget.",
                 "status": "watch",
             })
 
@@ -246,5 +259,97 @@ def build_insights(month):
             "text": f"Put aside ₹{m['savings_total']:,.0f} in savings/investments this month.",
             "status": "good",
         })
+
+    return bullets
+
+
+def _shift_month(month, delta):
+    year, mon = (int(p) for p in month.split("-"))
+    mon += delta
+    while mon <= 0:
+        mon += 12
+        year -= 1
+    while mon > 12:
+        mon -= 12
+        year += 1
+    return f"{year:04d}-{mon:02d}"
+
+
+def build_trend_insights(month, lookback=3):
+    """Cross-month pattern commentary — deterministic, zero Gemini calls,
+    reusing compute_metrics() for each prior month. Only surfaces bullets
+    once there's enough history to compare against; returns [] on a fresh
+    install or a month with no prior data, rather than fabricating a trend
+    out of nothing."""
+    prior_months = [_shift_month(month, -i) for i in range(1, lookback + 1)]
+    prior_metrics = [
+        compute_metrics(m) for m in prior_months if db.get_transactions_for_month(m)
+    ]
+    if len(prior_metrics) < 2:
+        return []
+
+    current = compute_metrics(month)
+    bullets = []
+
+    avg_spend = sum(pm["spend_total"] for pm in prior_metrics) / len(prior_metrics)
+    if avg_spend and current["days_elapsed"] >= 5:
+        # only worth comparing once a handful of days have actually elapsed —
+        # day 1-2 of a new month will always look "down" vs a full prior month
+        projected_full_month = current["projected"]
+        diff_pct = (projected_full_month - avg_spend) / avg_spend * 100
+        if abs(diff_pct) >= 10:
+            direction = "higher" if diff_pct > 0 else "lower"
+            status = "watch" if diff_pct > 0 else "good"
+            bullets.append({
+                "text": (
+                    f"On pace for {abs(diff_pct):.0f}% {direction} wallet spend than your "
+                    f"{len(prior_metrics)}-month average (₹{avg_spend:,.0f})."
+                ),
+                "status": status,
+            })
+
+    # Longest streak (ending this month) of the same category being the top
+    # spend category — a persistent pattern worth naming, not just a one-off.
+    streak_months = [current] + list(reversed(prior_metrics))
+    streak_category = current["top_category"]
+    streak_len = 0
+    if streak_category:
+        for pm in streak_months:
+            if pm["top_category"] == streak_category:
+                streak_len += 1
+            else:
+                break
+    if streak_len >= 3:
+        bullets.append({
+            "text": f"{streak_category} has been your top spend category for {streak_len} months running.",
+            "status": "note",
+        })
+
+    # Longest streak (ending this month) of staying on/off pace against the
+    # salary/wallet budget.
+    if current["budget"]:
+        over_streak = 0
+        under_streak = 0
+        for pm in streak_months:
+            if not pm["budget"]:
+                break
+            if pm["projected"] > pm["budget"]:
+                over_streak += 1
+                if under_streak:
+                    break
+            else:
+                under_streak += 1
+                if over_streak:
+                    break
+        if over_streak >= 3:
+            bullets.append({
+                "text": f"Projected spend has run over your salary/wallet budget for {over_streak} months in a row.",
+                "status": "watch",
+            })
+        elif under_streak >= 3:
+            bullets.append({
+                "text": f"On pace to stay under your salary/wallet budget for {under_streak} months in a row.",
+                "status": "good",
+            })
 
     return bullets
