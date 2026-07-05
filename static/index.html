@@ -7,15 +7,17 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
-  tailwind.config = {
-    darkMode: 'class',
-    theme: {
-      extend: {
-        colors: {
-          surface: '#0f1117',
-          panel: '#171a23',
-          border: '#262a36',
-          muted: '#8b8fa3',
+  if (window.tailwind) {
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: '#0f1117',
+            panel: '#171a23',
+            border: '#262a36',
+            muted: '#8b8fa3',
+          }
         }
       }
     }
@@ -23,9 +25,19 @@
 </script>
 <style>
   body { background: #0f1117; color: #e6e7ec; }
-  .card { background: #171a23; border: 1px solid #262a36; border-radius: 0.75rem; }
+  .card { background: #171a23; border: 1px solid #262a36; border-radius: 0.75rem; transition: border-color 0.15s ease; }
+  .card:hover { border-color: #343a4a; }
   ::-webkit-scrollbar { height: 6px; width: 6px; }
   ::-webkit-scrollbar-thumb { background: #2a2e3a; border-radius: 4px; }
+  input[type="month"], input[type="text"], input[type="number"], input[type="color"], select {
+    background: #0f1117; border: 1px solid #262a36; border-radius: 0.5rem;
+  }
+  .chip { display: inline-flex; align-items: center; gap: 0.25rem; background: #0f1117; border: 1px solid #262a36; border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.75rem; }
+  .chip button { color: #8b8fa3; }
+  .chip button:hover { color: #f87171; }
+  .modal-backdrop { background: rgba(0,0,0,0.6); }
+  .icon-btn { color: #8b8fa3; transition: color 0.15s ease; }
+  .icon-btn:hover { color: #e6e7ec; }
 </style>
 </head>
 <body class="min-h-screen antialiased">
@@ -36,23 +48,30 @@
       <h1 class="text-xl font-semibold tracking-tight">Personal Cashflow Ledger</h1>
       <p class="text-sm text-muted">where every rupee went.</p>
     </div>
-    <input id="month-picker" type="month" class="card px-3 py-1.5 text-sm text-white [color-scheme:dark]" />
+    <div class="flex items-center gap-2">
+      <input id="month-picker" type="month" class="card px-3 py-1.5 text-sm text-white [color-scheme:dark]" />
+      <button id="open-settings" class="card px-3 py-1.5 text-sm icon-btn" title="Settings">⚙ Settings</button>
+      <button id="open-categories" class="card px-3 py-1.5 text-sm icon-btn" title="Manage categories">🏷 Categories</button>
+    </div>
   </header>
 
   <!-- Summary cards -->
   <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="card p-4">
-      <p class="text-xs text-muted uppercase tracking-wide">Spent this month</p>
-      <p id="card-spent" class="text-2xl font-semibold mt-1">₹0</p>
-      <p id="card-spent-sub" class="text-xs text-muted mt-1">0% of ₹0 used</p>
+      <p class="text-xs text-muted uppercase tracking-wide">Salary</p>
+      <p id="card-salary" class="text-2xl font-semibold mt-1">₹0</p>
+      <p id="card-salary-sub" class="text-xs text-muted mt-1">0% of ₹0 used</p>
       <div class="h-1.5 rounded-full bg-[#262a36] mt-2 overflow-hidden">
-        <div id="card-spent-bar" class="h-full bg-amber-500" style="width:0%"></div>
+        <div id="card-salary-bar" class="h-full bg-amber-500" style="width:0%"></div>
       </div>
     </div>
     <div class="card p-4">
-      <p class="text-xs text-muted uppercase tracking-wide">Budget left</p>
-      <p id="card-left" class="text-2xl font-semibold mt-1">₹0</p>
-      <p id="card-left-sub" class="text-xs text-muted mt-1">₹0/day for 0 days left</p>
+      <p class="text-xs text-muted uppercase tracking-wide">Credit</p>
+      <p id="card-credit" class="text-2xl font-semibold mt-1">₹0</p>
+      <p id="card-credit-sub" class="text-xs text-muted mt-1">0% of ₹0 used</p>
+      <div class="h-1.5 rounded-full bg-[#262a36] mt-2 overflow-hidden">
+        <div id="card-credit-bar" class="h-full bg-sky-500" style="width:0%"></div>
+      </div>
     </div>
     <div class="card p-4">
       <p class="text-xs text-muted uppercase tracking-wide">Top category</p>
@@ -93,17 +112,35 @@
     <div class="h-64"><canvas id="burn-chart"></canvas></div>
   </section>
 
-  <!-- Month over month -->
+  <!-- Month over month + Savings -->
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="card p-4">
+      <h2 class="font-medium mb-3">Month over month</h2>
+      <div class="h-56"><canvas id="monthly-chart"></canvas></div>
+    </div>
+    <div class="card p-4">
+      <h2 class="font-medium mb-1">Savings &amp; investments</h2>
+      <p id="savings-total-sub" class="text-xs text-muted mb-2">₹0 saved this month</p>
+      <div class="h-56"><canvas id="savings-chart"></canvas></div>
+    </div>
+  </section>
+
+  <!-- Recurring & annual expenses -->
   <section class="card p-4">
-    <h2 class="font-medium mb-3">Month over month</h2>
-    <div class="h-56"><canvas id="monthly-chart"></canvas></div>
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="font-medium">Recurring &amp; annual expenses</h2>
+      <span id="recurring-total" class="text-sm text-muted">₹0/yr</span>
+    </div>
+    <p class="text-xs text-muted mb-3">Cross-cutting costs tagged 'yearly' — still counted in salary/credit above, tracked here so they don't get lost in one month's noise.</p>
+    <div id="recurring-list" class="space-y-2 text-sm"></div>
+    <p id="recurring-empty" class="text-sm text-muted hidden">No recurring expenses logged yet. Tag one with "yearly", e.g. "gym membership 12000 yearly".</p>
   </section>
 
   <!-- Budgets & alerts -->
   <section class="card p-4">
     <h2 class="font-medium mb-3">Budgets &amp; alerts</h2>
     <div id="budgets-list" class="space-y-4"></div>
-    <p id="budgets-empty" class="text-sm text-muted hidden">No category caps set yet.</p>
+    <p id="budgets-empty" class="text-sm text-muted hidden">No category caps set yet — set one in 🏷 Categories.</p>
   </section>
 
   <!-- Recent activity -->
@@ -117,6 +154,7 @@
             <th class="py-2 pr-4 font-normal">Date</th>
             <th class="py-2 pr-4 font-normal">Category</th>
             <th class="py-2 pr-4 font-normal">Note</th>
+            <th class="py-2 pr-4 font-normal">Source</th>
             <th class="py-2 pr-4 font-normal text-right">Amount</th>
           </tr>
         </thead>
@@ -125,6 +163,46 @@
     </div>
   </section>
 
+</div>
+
+<!-- Settings modal -->
+<div id="settings-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
+  <div class="card p-5 w-full max-w-sm">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-medium">Settings</h3>
+      <button class="settings-close icon-btn text-lg leading-none">&times;</button>
+    </div>
+    <label class="block text-xs text-muted mb-1">Monthly salary (₹)</label>
+    <input id="input-salary" type="number" class="w-full px-3 py-2 text-sm mb-3" />
+    <label class="block text-xs text-muted mb-1">Credit limit (₹)</label>
+    <input id="input-credit" type="number" class="w-full px-3 py-2 text-sm mb-4" />
+    <button id="save-settings" class="w-full bg-amber-500 hover:bg-amber-400 text-black text-sm font-medium rounded-lg py-2">Save</button>
+  </div>
+</div>
+
+<!-- Categories modal -->
+<div id="categories-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
+  <div class="card p-5 w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-medium">Manage categories</h3>
+      <button class="categories-close icon-btn text-lg leading-none">&times;</button>
+    </div>
+    <div id="categories-editor" class="space-y-4"></div>
+    <div class="border-t border-[#262a36] mt-5 pt-4">
+      <p class="text-xs text-muted uppercase tracking-wide mb-2">Add category</p>
+      <div class="flex flex-wrap gap-2 items-center">
+        <input id="new-cat-name" type="text" placeholder="Name" class="px-2 py-1.5 text-sm w-32" />
+        <input id="new-cat-color" type="color" value="#64748b" class="h-8 w-10 p-0.5" />
+        <select id="new-cat-kind" class="px-2 py-1.5 text-sm">
+          <option value="discretionary">discretionary</option>
+          <option value="essential">essential</option>
+          <option value="saving">saving</option>
+        </select>
+        <input id="new-cat-cap" type="number" placeholder="Cap (optional)" class="px-2 py-1.5 text-sm w-32" />
+        <button id="add-category" class="bg-amber-500 hover:bg-amber-400 text-black text-sm font-medium rounded-lg px-3 py-1.5">Add</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -138,10 +216,40 @@ function currentMonthStr() {
 
 monthPicker.value = currentMonthStr();
 
-let donutChart, burnChart, monthlyChart;
+// Chart.js is loaded from a CDN — on a flaky connection it may fail to load.
+// Guard every chart call so a missing Chart global degrades to "no chart"
+// instead of throwing and killing the rest of the dashboard's JS (cards,
+// insights, tables all fetch independently and don't need Chart.js).
+const chartsAvailable = () => typeof Chart !== 'undefined';
 
-async function fetchJSON(path, month) {
-  const res = await fetch(`${path}?month=${month}`);
+function noChartFallback(canvasId) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || canvas.dataset.fallbackShown) return;
+  canvas.dataset.fallbackShown = '1';
+  const msg = document.createElement('p');
+  msg.className = 'text-xs text-muted text-center pt-8';
+  msg.textContent = 'Chart library failed to load (check internet connection).';
+  canvas.replaceWith(msg);
+}
+
+if (chartsAvailable()) {
+  Chart.defaults.font.family = "ui-sans-serif, system-ui, sans-serif";
+  Chart.defaults.color = '#8b8fa3';
+  Chart.defaults.plugins.tooltip.backgroundColor = '#1c202b';
+  Chart.defaults.plugins.tooltip.titleColor = '#e6e7ec';
+  Chart.defaults.plugins.tooltip.bodyColor = '#c7cad4';
+  Chart.defaults.plugins.tooltip.borderColor = '#343a4a';
+  Chart.defaults.plugins.tooltip.borderWidth = 1;
+  Chart.defaults.plugins.tooltip.padding = 10;
+  Chart.defaults.plugins.tooltip.cornerRadius = 8;
+  Chart.defaults.plugins.tooltip.displayColors = false;
+}
+
+let donutChart, burnChart, monthlyChart, savingsChart;
+
+async function fetchJSON(path, params) {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await fetch(`${path}${qs}`);
   return res.json();
 }
 
@@ -154,15 +262,19 @@ function statusColor(status) {
 }
 
 async function loadSummary(month) {
-  const s = await fetchJSON('/api/summary', month);
+  const s = await fetchJSON('/api/summary', { month });
 
-  document.getElementById('card-spent').textContent = fmtINR(s.spent);
-  document.getElementById('card-spent-sub').textContent = `${s.pct_used.toFixed(0)}% of ${fmtINR(s.budget)} used`;
-  document.getElementById('card-spent-bar').style.width = Math.min(s.pct_used, 100) + '%';
-  document.getElementById('card-spent-bar').className = 'h-full ' + (s.pct_used > 100 ? 'bg-red-500' : 'bg-amber-500');
+  document.getElementById('card-salary').textContent = fmtINR(s.salary_used);
+  document.getElementById('card-salary-sub').textContent = `${s.salary_pct_used.toFixed(0)}% of ${fmtINR(s.monthly_salary)} used`;
+  document.getElementById('card-salary-bar').style.width = Math.min(s.salary_pct_used, 100) + '%';
+  document.getElementById('card-salary-bar').className = 'h-full ' + (s.salary_pct_used > 100 ? 'bg-red-500' : 'bg-amber-500');
 
-  document.getElementById('card-left').textContent = fmtINR(s.budget_left);
-  document.getElementById('card-left-sub').textContent = `${fmtINR(s.per_day_left)}/day for ${s.days_left} days left`;
+  document.getElementById('card-credit').textContent = fmtINR(s.credit_used);
+  document.getElementById('card-credit-sub').textContent = s.credit_limit
+    ? `${s.credit_pct_used.toFixed(0)}% of ${fmtINR(s.credit_limit)} used`
+    : 'No credit limit set';
+  document.getElementById('card-credit-bar').style.width = Math.min(s.credit_pct_used, 100) + '%';
+  document.getElementById('card-credit-bar').className = 'h-full ' + (s.credit_pct_used > 100 ? 'bg-red-500' : 'bg-sky-500');
 
   document.getElementById('card-top').textContent = s.top_category || '—';
   document.getElementById('card-top-sub').textContent = `${fmtINR(s.top_amount)} · ${s.top_pct.toFixed(0)}% of spend`;
@@ -176,18 +288,23 @@ async function loadSummary(month) {
   const data = s.breakdown.map(b => b.amount);
   const colors = s.breakdown.map(b => b.color);
 
-  if (donutChart) donutChart.destroy();
-  donutChart = new Chart(document.getElementById('donut-chart'), {
-    type: 'doughnut',
-    data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: '#171a23', borderWidth: 2 }] },
-    options: {
-      cutout: '70%',
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmtINR(ctx.raw)}` } },
+  if (chartsAvailable()) {
+    if (donutChart) donutChart.destroy();
+    donutChart = new Chart(document.getElementById('donut-chart'), {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: '#171a23', borderWidth: 2, hoverOffset: 10, hoverBorderColor: '#171a23' }] },
+      options: {
+        cutout: '70%',
+        animation: { animateRotate: true, duration: 500 },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmtINR(ctx.raw)}` } },
+        },
       },
-    },
-  });
+    });
+  } else {
+    noChartFallback('donut-chart');
+  }
 
   const legendList = document.getElementById('legend-list');
   legendList.innerHTML = s.breakdown.map(b => `
@@ -199,10 +316,12 @@ async function loadSummary(month) {
       <span class="text-muted">${fmtINR(b.amount)} · ${b.pct.toFixed(0)}%</span>
     </li>
   `).join('') || '<li class="text-muted">No spend logged yet.</li>';
+
+  return s;
 }
 
 async function loadInsights(month) {
-  const data = await fetchJSON('/api/insights', month);
+  const data = await fetchJSON('/api/insights', { month });
   const list = document.getElementById('insights-list');
   list.innerHTML = data.insights.map(i => `
     <li class="flex items-start gap-2">
@@ -213,13 +332,20 @@ async function loadInsights(month) {
 }
 
 async function loadDailyBurn(month) {
-  const d = await fetchJSON('/api/daily-burn', month);
+  const d = await fetchJSON('/api/daily-burn', { month });
   const labels = d.series.map(p => p.day);
   const cumulative = d.series.map(p => p.cumulative);
   const budgetLine = d.series.map(p => d.budget_per_day * p.day);
 
+  if (!chartsAvailable()) { noChartFallback('burn-chart'); return; }
   if (burnChart) burnChart.destroy();
-  burnChart = new Chart(document.getElementById('burn-chart'), {
+  const canvas = document.getElementById('burn-chart');
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 250);
+  gradient.addColorStop(0, 'rgba(245,158,11,0.28)');
+  gradient.addColorStop(1, 'rgba(245,158,11,0.02)');
+
+  burnChart = new Chart(canvas, {
     type: 'line',
     data: {
       labels,
@@ -228,11 +354,15 @@ async function loadDailyBurn(month) {
           label: 'Cumulative spend',
           data: cumulative,
           borderColor: '#f59e0b',
-          backgroundColor: 'rgba(245,158,11,0.1)',
+          backgroundColor: gradient,
           fill: true,
-          tension: 0.25,
+          tension: 0.3,
           pointRadius: 0,
-          borderWidth: 2,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: '#f59e0b',
+          pointHoverBorderColor: '#171a23',
+          pointHoverBorderWidth: 2,
+          borderWidth: 2.5,
         },
         {
           label: 'Even-pace budget',
@@ -240,6 +370,7 @@ async function loadDailyBurn(month) {
           borderColor: '#64748b',
           borderDash: [6, 4],
           pointRadius: 0,
+          pointHoverRadius: 0,
           borderWidth: 1.5,
           fill: false,
         },
@@ -248,11 +379,16 @@ async function loadDailyBurn(month) {
     options: {
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { labels: { color: '#8b8fa3' } },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtINR(ctx.raw)}` } },
+        legend: { labels: { color: '#8b8fa3', usePointStyle: true, boxWidth: 8 } },
+        tooltip: {
+          callbacks: {
+            title: (items) => `Day ${items[0].label}`,
+            label: (ctx) => `${ctx.dataset.label}: ${fmtINR(ctx.raw)}`,
+          },
+        },
       },
       scales: {
-        x: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3' } },
+        x: { grid: { color: '#1e2129', display: false }, ticks: { color: '#8b8fa3' } },
         y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
       },
     },
@@ -260,16 +396,18 @@ async function loadDailyBurn(month) {
 }
 
 async function loadMonthly(month) {
-  const d = await fetchJSON('/api/monthly', month);
+  const d = await fetchJSON('/api/monthly', { month });
   const labels = d.months.map(m => m.month);
   const totals = d.months.map(m => m.total);
   const current = month;
   const colors = d.months.map(m => (m.month === current ? '#f59e0b' : '#3b3f4d'));
+  const hoverColors = d.months.map(m => (m.month === current ? '#fbbf24' : '#4b5163'));
 
+  if (!chartsAvailable()) { noChartFallback('monthly-chart'); return; }
   if (monthlyChart) monthlyChart.destroy();
   monthlyChart = new Chart(document.getElementById('monthly-chart'), {
     type: 'bar',
-    data: { labels, datasets: [{ data: totals, backgroundColor: colors, borderRadius: 4, maxBarThickness: 40 }] },
+    data: { labels, datasets: [{ data: totals, backgroundColor: colors, hoverBackgroundColor: hoverColors, borderRadius: 4, maxBarThickness: 40 }] },
     options: {
       plugins: {
         legend: { display: false },
@@ -283,8 +421,60 @@ async function loadMonthly(month) {
   });
 }
 
+async function loadSavings(month) {
+  const d = await fetchJSON('/api/savings', { month });
+  const labels = d.months.map(m => m.month);
+  const totals = d.months.map(m => m.total);
+  const current = month;
+  const colors = d.months.map(m => (m.month === current ? '#eab308' : '#3f3a24'));
+  const hoverColors = d.months.map(m => (m.month === current ? '#facc15' : '#59502f'));
+
+  document.getElementById('savings-total-sub').textContent =
+    `${fmtINR(totals[totals.length - 1] || 0)} saved this month`;
+
+  if (!chartsAvailable()) { noChartFallback('savings-chart'); return; }
+  if (savingsChart) savingsChart.destroy();
+  savingsChart = new Chart(document.getElementById('savings-chart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data: totals, backgroundColor: colors, hoverBackgroundColor: hoverColors, borderRadius: 4, maxBarThickness: 40 }] },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => fmtINR(ctx.raw) } },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
+        y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+      },
+    },
+  });
+}
+
+async function loadRecurring() {
+  const d = await fetchJSON('/api/recurring');
+  const list = document.getElementById('recurring-list');
+  const empty = document.getElementById('recurring-empty');
+  document.getElementById('recurring-total').textContent = `${fmtINR(d.total)}/yr`;
+
+  if (!d.transactions.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = d.transactions.map(t => `
+    <div class="flex items-center justify-between border-b border-[#1e2129] pb-2">
+      <span>
+        <span class="text-muted">${t.spent_on}</span>
+        · ${t.category} ${t.note ? '· ' + t.note : ''}
+      </span>
+      <span>${fmtINR(t.amount)}</span>
+    </div>
+  `).join('');
+}
+
 async function loadBudgets(month) {
-  const d = await fetchJSON('/api/budgets', month);
+  const d = await fetchJSON('/api/budgets', { month });
   const list = document.getElementById('budgets-list');
   const empty = document.getElementById('budgets-empty');
 
@@ -318,16 +508,15 @@ async function loadBudgets(month) {
   `).join('');
 }
 
-async function loadTransactions(month) {
-  const d = await fetchJSON('/api/transactions', month);
+async function loadTransactions(month, summary) {
+  const d = await fetchJSON('/api/transactions', { month });
   const body = document.getElementById('transactions-body');
   const categories = {};
-  const s = await fetchJSON('/api/summary', month);
-  s.breakdown.forEach(b => categories[b.category] = b.color);
+  summary.breakdown.forEach(b => categories[b.category] = b.color);
 
   body.innerHTML = d.transactions.map(t => `
     <tr class="border-b border-[#1e2129]">
-      <td class="py-2 pr-4 text-muted">${t.spent_on}</td>
+      <td class="py-2 pr-4 text-muted">${t.spent_on}${t.period === 'yearly' ? ' <span class=\"text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300\">yearly</span>' : ''}</td>
       <td class="py-2 pr-4">
         <span class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full inline-block" style="background:${categories[t.category] || '#64748b'}"></span>
@@ -335,25 +524,161 @@ async function loadTransactions(month) {
         </span>
       </td>
       <td class="py-2 pr-4 text-muted">${t.note || ''}</td>
+      <td class="py-2 pr-4 text-muted">${t.payment_source === 'credit' ? '💳 Credit' : '💰 Salary'}</td>
       <td class="py-2 pr-4 text-right">${fmtINR(t.amount)}</td>
     </tr>
-  `).join('') || `<tr><td colspan="4" class="py-4 text-center text-muted">No transactions yet.</td></tr>`;
+  `).join('') || `<tr><td colspan="5" class="py-4 text-center text-muted">No transactions yet.</td></tr>`;
 }
 
 async function loadAll() {
   const month = monthPicker.value || currentMonthStr();
-  await Promise.all([
-    loadSummary(month),
+  const summary = await loadSummary(month).catch((e) => { console.error(e); return { breakdown: [] }; });
+  await Promise.allSettled([
     loadInsights(month),
     loadDailyBurn(month),
     loadMonthly(month),
+    loadSavings(month),
+    loadRecurring(),
     loadBudgets(month),
-    loadTransactions(month),
+    loadTransactions(month, summary),
   ]);
 }
 
 monthPicker.addEventListener('change', loadAll);
 loadAll();
+
+// ---- Settings modal ----------------------------------------------------
+
+const settingsModal = document.getElementById('settings-modal');
+document.getElementById('open-settings').addEventListener('click', async () => {
+  const s = await fetchJSON('/api/settings');
+  document.getElementById('input-salary').value = s.monthly_salary;
+  document.getElementById('input-credit').value = s.credit_limit;
+  settingsModal.classList.remove('hidden');
+  settingsModal.classList.add('flex');
+});
+document.querySelectorAll('.settings-close').forEach(el => el.addEventListener('click', () => {
+  settingsModal.classList.add('hidden');
+  settingsModal.classList.remove('flex');
+}));
+document.getElementById('save-settings').addEventListener('click', async () => {
+  await fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      monthly_salary: parseFloat(document.getElementById('input-salary').value) || 0,
+      credit_limit: parseFloat(document.getElementById('input-credit').value) || 0,
+    }),
+  });
+  settingsModal.classList.add('hidden');
+  settingsModal.classList.remove('flex');
+  loadAll();
+});
+
+// ---- Categories modal ---------------------------------------------------
+
+const categoriesModal = document.getElementById('categories-modal');
+
+async function renderCategoriesEditor() {
+  const d = await fetchJSON('/api/categories');
+  const editor = document.getElementById('categories-editor');
+  editor.innerHTML = d.categories.map(c => `
+    <div class="border border-[#262a36] rounded-lg p-3" data-cat="${c.name}">
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        <input type="color" value="${c.color}" class="cat-color h-7 w-9 p-0.5" />
+        <span class="font-medium flex-1">${c.name}</span>
+        <select class="cat-kind text-xs px-2 py-1">
+          <option value="discretionary" ${c.kind === 'discretionary' ? 'selected' : ''}>discretionary</option>
+          <option value="essential" ${c.kind === 'essential' ? 'selected' : ''}>essential</option>
+          <option value="saving" ${c.kind === 'saving' ? 'selected' : ''}>saving</option>
+        </select>
+        <input type="number" placeholder="Cap" class="cat-cap text-xs px-2 py-1 w-24" value="${c.monthly_cap ?? ''}" />
+        <button class="cat-save text-xs bg-amber-500 hover:bg-amber-400 text-black rounded px-2 py-1">Save</button>
+        ${c.name !== 'Other' ? '<button class="cat-delete text-xs text-red-400 hover:text-red-300 px-2 py-1">Delete</button>' : ''}
+      </div>
+      <div class="flex flex-wrap gap-1.5 items-center cat-keywords">
+        ${c.keywords.map(k => `<span class="chip">${k}<button data-kw="${k}" class="kw-delete">&times;</button></span>`).join('')}
+        <input type="text" placeholder="+ keyword" class="kw-add text-xs px-2 py-1 w-24" />
+      </div>
+    </div>
+  `).join('');
+
+  editor.querySelectorAll('[data-cat]').forEach(row => {
+    const name = row.dataset.cat;
+
+    row.querySelector('.cat-save').addEventListener('click', async () => {
+      const color = row.querySelector('.cat-color').value;
+      const kind = row.querySelector('.cat-kind').value;
+      const capVal = row.querySelector('.cat-cap').value;
+      await fetch(`/api/categories/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color, kind, monthly_cap: capVal === '' ? null : parseFloat(capVal), clear_cap: capVal === '' }),
+      });
+      loadAll();
+    });
+
+    const deleteBtn = row.querySelector('.cat-delete');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', async () => {
+        if (!confirm(`Delete ${name}? Its past transactions move to Other.`)) return;
+        await fetch(`/api/categories/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        renderCategoriesEditor();
+        loadAll();
+      });
+    }
+
+    row.querySelectorAll('.kw-delete').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await fetch(`/api/categories/${encodeURIComponent(name)}/keywords/${encodeURIComponent(btn.dataset.kw)}`, { method: 'DELETE' });
+        renderCategoriesEditor();
+      });
+    });
+
+    const kwInput = row.querySelector('.kw-add');
+    kwInput.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter' || !kwInput.value.trim()) return;
+      await fetch(`/api/categories/${encodeURIComponent(name)}/keywords`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyword: kwInput.value.trim() }),
+      });
+      renderCategoriesEditor();
+    });
+  });
+}
+
+document.getElementById('open-categories').addEventListener('click', () => {
+  renderCategoriesEditor();
+  categoriesModal.classList.remove('hidden');
+  categoriesModal.classList.add('flex');
+});
+document.querySelectorAll('.categories-close').forEach(el => el.addEventListener('click', () => {
+  categoriesModal.classList.add('hidden');
+  categoriesModal.classList.remove('flex');
+}));
+
+document.getElementById('add-category').addEventListener('click', async () => {
+  const name = document.getElementById('new-cat-name').value.trim();
+  if (!name) return;
+  const color = document.getElementById('new-cat-color').value;
+  const kind = document.getElementById('new-cat-kind').value;
+  const capVal = document.getElementById('new-cat-cap').value;
+  const res = await fetch('/api/categories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, color, kind, monthly_cap: capVal === '' ? null : parseFloat(capVal) }),
+  });
+  if (res.ok) {
+    document.getElementById('new-cat-name').value = '';
+    document.getElementById('new-cat-cap').value = '';
+    renderCategoriesEditor();
+    loadAll();
+  } else {
+    const err = await res.json();
+    alert(err.detail || 'Could not add category');
+  }
+});
 </script>
 </body>
 </html>

@@ -40,26 +40,45 @@ def extract_category(message):
     """
     lower = message.lower()
 
-    for name in config.CATEGORY_NAMES:
+    for name in db.get_category_names():
         match = re.search(rf"\b{re.escape(name.lower())}\b", lower)
         if match:
             return name, match.span()
 
-    for category, keywords in config.CATEGORY_KEYWORDS.items():
-        for keyword in keywords:
-            match = re.search(rf"\b{re.escape(keyword)}\b", lower)
-            if match:
-                return category, None
+    for keyword, category in db.get_keywords().items():
+        match = re.search(rf"\b{re.escape(keyword)}\b", lower)
+        if match:
+            return category, None
 
     return None, None
 
 
-def strip_note(message, amount_span, category_span):
-    """Remove the amount and an explicit trailing category word from the
-    message to build the free-text note."""
-    spans = sorted([s for s in (amount_span, category_span) if s], reverse=True)
+def extract_payment_source(message):
+    """Returns (payment_source, strip_span). Defaults to 'salary' with no
+    span when nothing is mentioned explicitly."""
+    lower = message.lower()
+    for keyword, source in config.PAYMENT_SOURCE_KEYWORDS.items():
+        match = re.search(rf"\b{re.escape(keyword)}\b", lower)
+        if match:
+            return source, match.span()
+    return "salary", None
+
+
+def extract_period(message):
+    """Returns (period, strip_span). Defaults to 'monthly' with no span."""
+    lower = message.lower()
+    for keyword in config.RECURRING_KEYWORDS:
+        match = re.search(rf"\b{re.escape(keyword)}\b", lower)
+        if match:
+            return "yearly", match.span()
+    return "monthly", None
+
+
+def strip_note(message, spans):
+    """Remove the given spans (amount, explicit category, payment source,
+    recurring tag) from the message to build the free-text note."""
     text = message
-    for start, end in spans:
+    for start, end in sorted((s for s in spans if s), reverse=True):
         text = text[:start] + text[end:]
     text = re.sub(r"₹", "", text)
     return re.sub(r"\s+", " ", text).strip(" -,.")
@@ -78,7 +97,7 @@ def classify_with_gemini(note):
     try:
         from google.genai import types
 
-        category_names = config.CATEGORY_NAMES
+        category_names = db.get_category_names()
         prompt = (
             "Classify this expense note into exactly one of these categories: "
             f"{', '.join(category_names)}.\n"
@@ -100,8 +119,8 @@ def classify_with_gemini(note):
 
 
 def parse_message(message):
-    """Returns a dict: {amount, category, note, guessed} or {error: str}
-    if the message has no parseable amount.
+    """Returns a dict: {amount, category, note, guessed, payment_source,
+    period} or {error: str} if the message has no parseable amount.
     """
     amount = extract_amount(message)
     if amount is None:
@@ -109,7 +128,10 @@ def parse_message(message):
 
     amount_match = AMOUNT_RE.search(message)
     category, category_span = extract_category(message)
-    note = strip_note(message, amount_match.span(), category_span)
+    payment_source, payment_span = extract_payment_source(message)
+    period, period_span = extract_period(message)
+
+    note = strip_note(message, [amount_match.span(), category_span, payment_span, period_span])
 
     guessed = False
     if category is None:
@@ -121,4 +143,6 @@ def parse_message(message):
         "category": category,
         "note": note,
         "guessed": guessed,
+        "payment_source": payment_source,
+        "period": period,
     }

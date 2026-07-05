@@ -83,28 +83,36 @@ expense-tracker/
 
 ```sql
 CREATE TABLE IF NOT EXISTS transactions (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts          TEXT NOT NULL,          -- ISO datetime the row was logged
-  spent_on    TEXT NOT NULL,          -- date of the expense (YYYY-MM-DD), default today
-  category    TEXT NOT NULL,          -- must match a categories.name
-  note        TEXT,                   -- e.g. "gym", "Zomato lunch"
-  amount      REAL NOT NULL,          -- in rupees
-  raw_message TEXT,                   -- original message, for debugging/undo
-  source      TEXT DEFAULT 'telegram'
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts             TEXT NOT NULL,          -- ISO datetime the row was logged
+  spent_on       TEXT NOT NULL,          -- date of the expense (YYYY-MM-DD), default today
+  category       TEXT NOT NULL,          -- must match a categories.name
+  note           TEXT,                   -- e.g. "gym", "Zomato lunch"
+  amount         REAL NOT NULL,          -- in rupees
+  raw_message    TEXT,                   -- original message, for debugging/undo
+  source         TEXT DEFAULT 'telegram',
+  guessed        INTEGER DEFAULT 0,      -- 1 if category came from the Gemini fallback
+  payment_source TEXT DEFAULT 'salary',  -- 'salary' | 'credit'
+  period         TEXT DEFAULT 'monthly'  -- 'monthly' | 'yearly' (cross-cutting/recurring)
 );
 
 CREATE TABLE IF NOT EXISTS categories (
   name         TEXT PRIMARY KEY,
   color        TEXT NOT NULL,         -- hex, used by charts
-  kind         TEXT NOT NULL,         -- 'essential' | 'discretionary'
+  kind         TEXT NOT NULL,         -- 'essential' | 'discretionary' | 'saving'
   monthly_cap  REAL                   -- budget for Budgets & Alerts (nullable)
+);
+
+CREATE TABLE IF NOT EXISTS keywords (
+  keyword  TEXT PRIMARY KEY,          -- e.g. "zomato"
+  category TEXT NOT NULL REFERENCES categories(name)
 );
 
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
--- seed: monthly_budget=60000, currency='INR', timezone='Asia/Kolkata'
+-- seed: monthly_salary=60000, credit_limit=0, currency='INR', timezone='Asia/Kolkata'
 ```
 
 **Default categories** (seed on first run; colors mirror the reference UI):
@@ -117,10 +125,18 @@ CREATE TABLE IF NOT EXISTS settings (
 | Luxuries    | `#a855f7` | discretionary | gym, netflix, spotify, shopping      |
 | Health      | `#ef4444` | essential     | pharmeasy, medicine, doctor, apollo  |
 | Travel      | `#06b6d4` | discretionary | ola, uber, metro, flight, fuel       |
-| Investments | `#eab308` | essential     | sip, index fund, stocks, mutual fund |
+| Investments | `#eab308` | saving        | sip, index fund, stocks, mutual fund |
 | Other       | `#64748b` | discretionary | (fallback bucket)                    |
 
-Keyword→category aliases live in `config.py` as a dict and drive regex categorisation.
+`kind = 'saving'` categories still count fully against salary/credit like any other
+expense — they're money that actually left your account — but are *also* summed into
+the dedicated Savings & Investments chart on the dashboard, so contributions don't get
+lost among regular spending categories.
+
+Keyword→category aliases are seeded from `config.CATEGORY_KEYWORDS` into the `keywords`
+table on first run, then live entirely in the DB from that point on — editable from the
+dashboard's 🏷 Categories panel (add/remove keywords, add/edit/delete categories) without
+touching code. `config.py` is only the seed data for a fresh database.
 
 ---
 
@@ -133,18 +149,26 @@ Zomato lunch 300
 oyo 1500 travel
 SIP index fund 5000
 netflix 649
+electricity bill 2200 credit     -> payment_source=credit
+gym membership 12000 yearly      -> period=yearly (cross-cutting/recurring)
 ```
 
 **Algorithm (regex-first):**
 1. Extract **amount**: first number in the message (supports `1500`, `1,500`, `₹1500`).
-2. Extract **category**: scan tokens against the keyword-alias dict (case-insensitive).
-   If an explicit category name is present (`... travel`), that wins.
-3. **note** = message with the amount (and trailing explicit category word) stripped.
-4. `spent_on` = today unless the message contains a parseable date (keep simple: today only for v1).
-5. If **no category** confidently found → **Gemini fallback** (see below).
-6. If **no amount** found → reply asking user to include a number; do not write a row.
+2. Extract **category**: scan tokens against the keyword-alias dict (case-insensitive,
+   loaded from the `keywords` table). If an explicit category name is present
+   (`... travel`), that wins.
+3. Extract **payment_source**: trailing `credit`/`card`/`cc` → `credit`; `salary`/`cash`
+   or nothing mentioned → `salary` (the default).
+4. Extract **period**: trailing `yearly`/`annual`/`annually`/`recurring` → `yearly`;
+   otherwise `monthly` (the default).
+5. **note** = message with the amount, an explicit category name, and any payment/period
+   keyword stripped. A keyword-matched category word (e.g. "gym") is *kept* in the note.
+6. `spent_on` = today unless the message contains a parseable date (keep simple: today only for v1).
+7. If **no category** confidently found → **Gemini fallback** (see below).
+8. If **no amount** found → reply asking user to include a number; do not write a row.
 
-**Gemini fallback (only when step 5 triggers, and only if `GEMINI_API_KEY` set):**
+**Gemini fallback (only when step 7 triggers, and only if `GEMINI_API_KEY` set):**
 - Prompt: given the note text and the fixed list of category names, return exactly one
   category name as plain text. Low temperature. Cache identical notes in-memory.
 - If no API key or the call fails → assign `Other` and flag the row (still log it).
@@ -160,18 +184,21 @@ user id (the bot is public once created; this keeps strangers from injecting dat
 
 **Behaviour:**
 - Any normal text → parse → insert row → reply confirmation:
-  `✅ ₹1,500 · Luxuries · gym  (id 42)`
+  `✅ ₹1,500 · Luxuries · gym · 💰 Salary  (id 42)`
+  Credit-tagged expenses show `💳 Credit` instead; recurring ones append `· 🔁 Yearly`.
   If Gemini/`Other` fallback was used, append `⚠️ guessed category — reply /cat Food to fix`.
 
 **Commands:**
-| command            | action                                                        |
-|--------------------|---------------------------------------------------------------|
-| `/start`, `/help`  | short usage guide with examples                               |
-| `/undo`            | delete the last transaction, confirm what was removed         |
-| `/cat <Category>`  | change the category of the last transaction                   |
-| `/today`           | quick text summary of today's spend                           |
-| `/month`           | quick text summary of this month vs budget                    |
-| `/insights`        | run + send the monthly insight bullets (see §9)               |
+| command             | action                                                        |
+|---------------------|---------------------------------------------------------------|
+| `/start`, `/help`   | short usage guide with examples                               |
+| `/undo`             | delete the last transaction, confirm what was removed         |
+| `/cat <Category>`   | change the category of the last transaction                   |
+| `/today`            | quick text summary of today's spend                           |
+| `/month`            | quick text summary of this month vs salary & credit           |
+| `/insights`         | run + send the monthly insight bullets (see §9)               |
+| `/salary <amount>`  | set monthly salary (no arg = show current value)               |
+| `/credit <amount>`  | set credit limit (no arg = show current value)                 |
 
 ---
 
@@ -184,8 +211,8 @@ re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rup
 **Sections (top to bottom):**
 
 1. **Four summary cards**
-   - *Spent this month* — total + `X% of ₹BUDGET used` + thin progress bar.
-   - *Budget left* — `budget − spent` + `₹/day for N days left`.
+   - *Salary* — used + `X% of ₹SALARY used` + thin progress bar.
+   - *Credit* — used + `X% of ₹CREDIT_LIMIT used` + thin progress bar (red when over).
    - *Top category* — name + amount + `% of spend`.
    - *Projected month-end* — `spent / days_elapsed × days_in_month`, with `₹/day pace`.
 
@@ -196,26 +223,55 @@ re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rup
    per bullet (✓ good / ⚠ watch / → note).
 
 4. **Daily burn** — line chart: cumulative spend per day vs a straight dashed
-   even-pace budget line (`budget/days_in_month × day`).
+   even-pace budget line (`(salary+credit_limit)/days_in_month × day`).
 
-5. **Month over month** — bar chart: total outflow for the last 6 months; current
-   month highlighted.
+5. **Month over month + Savings & investments** — two bar charts side by side: total
+   outflow for the last 6 months (current month highlighted), and the same for
+   `kind='saving'` categories only, plus a "₹X saved this month" stat.
 
-6. **Budgets & alerts** — per category with a `monthly_cap`: label + `spent / cap`
+6. **Recurring & annual expenses** — list of `period='yearly'` transactions with an
+   annualised total. These still count fully against salary/credit above; this section
+   just keeps cross-cutting costs (e.g. an annual gym membership) visible instead of
+   buried in one month's activity.
+
+7. **Budgets & alerts** — per category with a `monthly_cap`: label + `spent / cap`
    progress bar. Bar is normal color when under, **red when over cap**. Show a
    `WATCH` tag near the cap, `ON TRACK` when comfortably under.
 
-7. **Recent activity** — table: Date · Category (colored dot) · Note · Amount.
-   Subtitle: "Latest entries logged from Telegram." Most recent first.
+8. **Recent activity** — table: Date · Category (colored dot) · Note · Payment source
+   (💰 Salary / 💳 Credit) · Amount. Yearly-tagged rows get a small "yearly" badge next
+   to the date. Subtitle: "Latest entries logged from Telegram." Most recent first.
+
+9. **🏷 Categories panel** (modal) — add/edit/delete categories (color, kind, monthly
+   cap) and their keyword aliases, backed by the `categories`/`keywords` tables via
+   `/api/categories`. No code editing required to add a category.
+
+10. **⚙ Settings panel** (modal) — edit `monthly_salary` and `credit_limit` via
+    `/api/settings`. Also settable from Telegram with `/salary` and `/credit`.
+
+Chart.js and Tailwind load from a CDN; if either fails (e.g. flaky wifi), the affected
+chart shows a small "Chart library failed to load" message in its place but the rest of
+the page — cards, insights, tables, category/settings management — keeps working off
+plain JSON, since none of that depends on the chart library being present.
 
 **API endpoints (`server.py`, all accept `?month=YYYY-MM`, default current):**
 ```
-GET /api/summary      -> cards + category breakdown + pace + insights inputs
-GET /api/insights     -> list of insight bullet strings + status
-GET /api/daily-burn   -> [{day, cumulative}], plus budget line params
-GET /api/monthly      -> last 6 months total outflow
-GET /api/budgets      -> [{category, cap, spent, status}]
-GET /api/transactions -> recent rows for the activity table
+GET  /api/summary                        -> cards + category breakdown + pace + insights inputs
+GET  /api/insights                       -> list of insight bullet strings + status
+GET  /api/daily-burn                     -> [{day, cumulative}], plus budget line params
+GET  /api/monthly                        -> last 6 months total outflow
+GET  /api/savings                        -> last 6 months total for kind='saving' categories
+GET  /api/recurring                      -> period='yearly' transactions + annual total
+GET  /api/budgets                        -> [{category, cap, spent, status}]
+GET  /api/transactions                   -> recent rows for the activity table
+GET  /api/categories                     -> categories with their keyword lists
+POST /api/categories                     -> add a category
+PUT  /api/categories/{name}              -> update color/kind/cap
+DEL  /api/categories/{name}              -> delete (reassigns its transactions to Other)
+POST /api/categories/{name}/keywords     -> add a keyword alias
+DEL  /api/categories/{name}/keywords/{k} -> remove a keyword alias
+GET  /api/settings                       -> monthly_salary, credit_limit, currency
+PUT  /api/settings                       -> update monthly_salary and/or credit_limit
 ```
 Bind uvicorn to `0.0.0.0:8000` so the tablet's LAN IP works from the phone.
 
@@ -227,10 +283,14 @@ Compute the **metrics with plain Python** (deterministic, free), then optionally
 Gemini only to phrase them into natural sentences. If no API key, use string templates.
 
 **Metrics to compute** (mirror the reference insights):
-- On-pace check: projected month-end vs budget → "On pace for ₹X, under/over your ₹BUDGET budget."
+- On-pace check: projected month-end vs (salary + credit_limit) → "On pace for ₹X,
+  under/over your ₹Y salary + credit."
+- Credit warning: if credit_used ≥ 80% of credit_limit → "Credit usage at ₹X of ₹Y —
+  getting close to the limit."
 - Category concentration: top category %; "Cutting it 20% saves ₹X/month (₹Y/year)."
 - Largest single expense: "Largest single hit: ₹X on <cat> (<note>)."
 - Discretionary ratio: sum(discretionary)/total; "Discretionary held at N%."
+- Savings: sum(kind='saving') this month; "Put aside ₹X in savings/investments this month."
 
 Return a list of `{text, status}` where status ∈ `good | watch | note`.
 
@@ -242,7 +302,8 @@ Return a list of `{text, status}` where status ∈ `good | watch | note`.
 TELEGRAM_BOT_TOKEN=        # from @BotFather
 ALLOWED_TELEGRAM_USER_ID=  # your numeric Telegram user id (bot ignores everyone else)
 GEMINI_API_KEY=            # optional; leave blank to disable AI (regex-only mode)
-MONTHLY_BUDGET=60000
+MONTHLY_SALARY=60000
+CREDIT_LIMIT=0
 CURRENCY=INR
 TIMEZONE=Asia/Kolkata
 DASHBOARD_HOST=0.0.0.0

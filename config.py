@@ -9,7 +9,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_TELEGRAM_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-MONTHLY_BUDGET = float(os.getenv("MONTHLY_BUDGET", "60000"))
+MONTHLY_SALARY = float(os.getenv("MONTHLY_SALARY", "60000"))
+CREDIT_LIMIT = float(os.getenv("CREDIT_LIMIT", "0"))
 CURRENCY = os.getenv("CURRENCY", "INR")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 
@@ -26,7 +27,7 @@ DEFAULT_CATEGORIES = {
     "Luxuries":    {"color": "#a855f7", "kind": "discretionary", "monthly_cap": None},
     "Health":      {"color": "#ef4444", "kind": "essential",     "monthly_cap": None},
     "Travel":      {"color": "#06b6d4", "kind": "discretionary", "monthly_cap": None},
-    "Investments": {"color": "#eab308", "kind": "essential",     "monthly_cap": None},
+    "Investments": {"color": "#eab308", "kind": "saving",        "monthly_cap": None},
     "Other":       {"color": "#64748b", "kind": "discretionary", "monthly_cap": None},
 }
 
@@ -63,3 +64,15 @@ CATEGORY_KEYWORDS = {
 }
 
 CATEGORY_NAMES = list(DEFAULT_CATEGORIES.keys())
+
+# trailing keyword in a message -> payment_source. Default (no match) is 'salary'.
+PAYMENT_SOURCE_KEYWORDS = {
+    "credit": "credit",
+    "card": "credit",
+    "cc": "credit",
+    "salary": "salary",
+    "cash": "salary",
+}
+
+# trailing keyword in a message -> period. Default (no match) is 'monthly'.
+RECURRING_KEYWORDS = ["yearly", "annual", "annually", "recurring"]

@@ -42,11 +42,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount=result["amount"],
         raw_message=message,
         guessed=result["guessed"],
+        payment_source=result["payment_source"],
+        period=result["period"],
     )
 
+    source_icon = "💳" if result["payment_source"] == "credit" else "💰"
     reply = f"✅ {_fmt_amount(result['amount'])} · {result['category']}"
     if result["note"]:
         reply += f" · {result['note']}"
+    reply += f" · {source_icon} {result['payment_source'].title()}"
+    if result["period"] == "yearly":
+        reply += " · 🔁 Yearly"
     reply += f"  (id {txn_id})"
     if result["guessed"]:
         reply += "\n⚠️ guessed category — reply /cat Food to fix"
@@ -63,13 +69,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  gym 1500\n"
         "  Zomato lunch 300\n"
         "  oyo 1500 travel\n"
-        "  SIP index fund 5000\n\n"
+        "  SIP index fund 5000\n"
+        "  electricity bill 2200 credit   → paid by credit card\n"
+        "  gym membership 12000 yearly    → recurring annual expense\n\n"
+        "Payment defaults to salary unless you add 'credit'/'card'.\n"
+        "Add 'yearly'/'annual'/'recurring' to tag a cross-cutting expense.\n\n"
         "Commands:\n"
         "/undo — delete the last transaction\n"
         "/cat <Category> — recategorise the last transaction\n"
         "/today — today's spend\n"
-        "/month — this month vs budget\n"
-        "/insights — monthly insight bullets"
+        "/month — this month vs salary & credit\n"
+        "/insights — monthly insight bullets\n"
+        "/salary <amount> — set your monthly salary\n"
+        "/credit <amount> — set your credit limit"
     )
 
 
@@ -136,10 +148,46 @@ async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     month = date.today().strftime("%Y-%m")
     m = insights.compute_metrics(month)
     await update.message.reply_text(
-        f"Spent this month: {_fmt_amount(m['total'])} of {_fmt_amount(m['budget'])} budget\n"
+        f"💰 Salary: {_fmt_amount(m['salary_used'])} of {_fmt_amount(m['monthly_salary'])} used "
+        f"({_fmt_amount(m['salary_left'])} left)\n"
+        f"💳 Credit: {_fmt_amount(m['credit_used'])} of {_fmt_amount(m['credit_limit'])} used "
+        f"({_fmt_amount(m['credit_left'])} left)\n"
         f"Projected month-end: {_fmt_amount(m['projected'])}\n"
-        f"Top category: {m['top_category'] or '—'} ({_fmt_amount(m['top_amount'])})"
+        f"Top category: {m['top_category'] or '—'} ({_fmt_amount(m['top_amount'])})\n"
+        f"Saved/invested: {_fmt_amount(m['savings_total'])}"
     )
+
+
+async def cmd_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    if not context.args:
+        current = db.get_setting("monthly_salary", "0")
+        await update.message.reply_text(f"Monthly salary is {_fmt_amount(float(current))}. Usage: /salary <amount>")
+        return
+    try:
+        amount = float(context.args[0].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("Usage: /salary <amount>, e.g. /salary 60000")
+        return
+    db.set_setting("monthly_salary", str(amount))
+    await update.message.reply_text(f"Monthly salary set to {_fmt_amount(amount)}.")
+
+
+async def cmd_credit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    if not context.args:
+        current = db.get_setting("credit_limit", "0")
+        await update.message.reply_text(f"Credit limit is {_fmt_amount(float(current))}. Usage: /credit <amount>")
+        return
+    try:
+        amount = float(context.args[0].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("Usage: /credit <amount>, e.g. /credit 20000")
+        return
+    db.set_setting("credit_limit", str(amount))
+    await update.message.reply_text(f"Credit limit set to {_fmt_amount(amount)}.")
 
 
 async def cmd_insights(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,6 +214,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("month", cmd_month))
     app.add_handler(CommandHandler("insights", cmd_insights))
+    app.add_handler(CommandHandler("salary", cmd_salary))
+    app.add_handler(CommandHandler("credit", cmd_credit))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     return app

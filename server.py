@@ -1,9 +1,12 @@
 """FastAPI app: JSON API for the dashboard + serves the static index.html.
-Read-only against the SQLite ledger — never writes a transaction."""
+Only the category/keyword/settings management endpoints write to the DB —
+transactions themselves are still only ever created by the Telegram bot."""
 from datetime import date
+from typing import Optional
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 import db
 import insights
@@ -40,28 +43,35 @@ def api_summary(month: str = Query(default=None)):
             "amount": amount,
             "pct": (amount / m["total"] * 100) if m["total"] else 0,
             "color": categories.get(cat, {}).get("color", "#64748b"),
+            "kind": categories.get(cat, {}).get("kind", "discretionary"),
         }
         for cat, amount in sorted(m["by_category"].items(), key=lambda kv: -kv[1])
     ]
 
     days_left = max(m["days_total"] - m["days_elapsed"], 0)
-    budget_left = m["budget"] - m["total"]
-    per_day_left = (budget_left / days_left) if days_left else 0.0
+    combined_left = m["salary_left"] + m["credit_left"]
+    per_day_left = (combined_left / days_left) if days_left else 0.0
     pace_per_day = (m["total"] / m["days_elapsed"]) if m["days_elapsed"] else 0.0
 
     return {
         "month": month,
         "spent": m["total"],
-        "budget": m["budget"],
-        "pct_used": (m["total"] / m["budget"] * 100) if m["budget"] else 0,
-        "budget_left": budget_left,
-        "per_day_left": per_day_left,
+        "projected": m["projected"],
+        "pace_per_day": pace_per_day,
         "days_left": days_left,
+        "per_day_left": per_day_left,
+        "monthly_salary": m["monthly_salary"],
+        "salary_used": m["salary_used"],
+        "salary_left": m["salary_left"],
+        "salary_pct_used": (m["salary_used"] / m["monthly_salary"] * 100) if m["monthly_salary"] else 0,
+        "credit_limit": m["credit_limit"],
+        "credit_used": m["credit_used"],
+        "credit_left": m["credit_left"],
+        "credit_pct_used": (m["credit_used"] / m["credit_limit"] * 100) if m["credit_limit"] else 0,
         "top_category": m["top_category"],
         "top_amount": m["top_amount"],
         "top_pct": m["top_pct"],
-        "projected": m["projected"],
-        "pace_per_day": pace_per_day,
+        "savings_total": m["savings_total"],
         "breakdown": breakdown,
     }
 
@@ -106,6 +116,20 @@ def api_monthly(month: str = Query(default=None)):
     return {"months": db.get_monthly_totals(months)}
 
 
+@app.get("/api/savings")
+def api_savings(month: str = Query(default=None)):
+    month = month or _current_month()
+    months = _last_n_months(6, month)
+    return {"months": db.get_monthly_totals(months, kind="saving")}
+
+
+@app.get("/api/recurring")
+def api_recurring():
+    txns = db.get_recurring_transactions()
+    total = sum(t["amount"] for t in txns)
+    return {"transactions": txns, "total": total}
+
+
 @app.get("/api/budgets")
 def api_budgets(month: str = Query(default=None)):
     month = month or _current_month()
@@ -141,6 +165,108 @@ def api_transactions(month: str = Query(default=None), limit: int = Query(defaul
     month = month or _current_month()
     txns = db.get_transactions_for_month(month)
     return {"month": month, "transactions": txns[:limit]}
+
+
+# ---- category & keyword management ---------------------------------------
+
+class CategoryIn(BaseModel):
+    name: str
+    color: str
+    kind: str
+    monthly_cap: Optional[float] = None
+
+
+class CategoryUpdate(BaseModel):
+    color: Optional[str] = None
+    kind: Optional[str] = None
+    monthly_cap: Optional[float] = None
+    clear_cap: bool = False
+
+
+class KeywordIn(BaseModel):
+    keyword: str
+
+
+VALID_KINDS = {"essential", "discretionary", "saving"}
+
+
+@app.get("/api/categories")
+def api_get_categories():
+    categories = db.get_categories()
+    keywords = db.get_keywords_by_category()
+    for cat in categories:
+        cat["keywords"] = keywords.get(cat["name"], [])
+    return {"categories": categories}
+
+
+@app.post("/api/categories")
+def api_add_category(body: CategoryIn):
+    if body.kind not in VALID_KINDS:
+        raise HTTPException(400, f"kind must be one of {sorted(VALID_KINDS)}")
+    if body.name in db.get_category_names():
+        raise HTTPException(409, f"Category {body.name!r} already exists")
+    db.add_category(body.name, body.color, body.kind, body.monthly_cap)
+    return {"ok": True}
+
+
+@app.put("/api/categories/{name}")
+def api_update_category(name: str, body: CategoryUpdate):
+    if name not in db.get_category_names():
+        raise HTTPException(404, f"Category {name!r} not found")
+    if body.kind is not None and body.kind not in VALID_KINDS:
+        raise HTTPException(400, f"kind must be one of {sorted(VALID_KINDS)}")
+    cap = None if body.clear_cap else (body.monthly_cap if body.monthly_cap is not None else -1)
+    db.update_category(name, color=body.color, kind=body.kind, monthly_cap=cap)
+    return {"ok": True}
+
+
+@app.delete("/api/categories/{name}")
+def api_delete_category(name: str):
+    if name == "Other":
+        raise HTTPException(400, "Can't delete the 'Other' fallback category")
+    if name not in db.get_category_names():
+        raise HTTPException(404, f"Category {name!r} not found")
+    db.delete_category(name)
+    return {"ok": True}
+
+
+@app.post("/api/categories/{name}/keywords")
+def api_add_keyword(name: str, body: KeywordIn):
+    if name not in db.get_category_names():
+        raise HTTPException(404, f"Category {name!r} not found")
+    db.add_keyword(body.keyword, name)
+    return {"ok": True}
+
+
+@app.delete("/api/categories/{name}/keywords/{keyword}")
+def api_delete_keyword(name: str, keyword: str):
+    db.delete_keyword(keyword)
+    return {"ok": True}
+
+
+# ---- settings ---------------------------------------------------------
+
+class SettingsUpdate(BaseModel):
+    monthly_salary: Optional[float] = None
+    credit_limit: Optional[float] = None
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    return {
+        "monthly_salary": float(db.get_setting("monthly_salary", 0)),
+        "credit_limit": float(db.get_setting("credit_limit", 0)),
+        "currency": db.get_setting("currency", "INR"),
+    }
+
+
+@app.put("/api/settings")
+def api_update_settings(body: SettingsUpdate):
+    if body.monthly_salary is not None:
+        db.set_setting("monthly_salary", str(body.monthly_salary))
+    if body.credit_limit is not None:
+        db.set_setting("credit_limit", str(body.credit_limit))
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

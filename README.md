@@ -22,10 +22,21 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
 
 - **Log an expense:** message the bot on Telegram, e.g. `gym 1500`,
   `Zomato lunch 300`, `oyo 1500 travel`.
+- **Pay by credit card:** add `credit` (or `card`/`cc`), e.g.
+  `electricity bill 2200 credit`. Default payment source is your salary.
+- **Tag a recurring/annual cost:** add `yearly` (or `annual`/`recurring`), e.g.
+  `gym membership 12000 yearly`. It still counts against this month's
+  salary/credit, but shows up in its own "Recurring & annual expenses" section
+  on the dashboard instead of skewing one month's numbers.
+- **Set your salary/credit limit:** `/salary 60000`, `/credit 20000` on the
+  bot, or via the ⚙ Settings panel on the dashboard.
 - **View the dashboard:** open `http://localhost:8000` on the tablet, or
   `http://<tablet-lan-ip>:8000` from a phone on the same wifi.
+- **Manage categories:** use the 🏷 Categories panel on the dashboard to
+  add/edit/delete categories, colors, monthly caps, and keyword aliases — no
+  code editing needed.
 - **Bot commands:** `/start`, `/undo`, `/cat <Category>`, `/today`, `/month`,
-  `/insights`.
+  `/insights`, `/salary <amount>`, `/credit <amount>`.
 
 ## Without a Telegram bot token
 

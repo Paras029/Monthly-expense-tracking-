@@ -1,12 +1,11 @@
 """Deterministic metrics + phrased insight bullets for the monthly dashboard.
 
 Metrics are always computed in plain Python (free, exact). Gemini is only
-used, optionally, to rephrase them into more natural sentences.
+used, optionally, to rephrase them into natural sentences.
 """
 from calendar import monthrange
 from datetime import date
 
-import config
 import db
 
 
@@ -26,9 +25,15 @@ def _days_elapsed(month):
 def compute_metrics(month):
     txns = db.get_transactions_for_month(month)
     categories = {c["name"]: c for c in db.get_categories()}
-    budget = float(db.get_setting("monthly_budget", config.MONTHLY_BUDGET))
+
+    monthly_salary = float(db.get_setting("monthly_salary", 0))
+    credit_limit = float(db.get_setting("credit_limit", 0))
+    budget = monthly_salary + credit_limit
 
     total = sum(t["amount"] for t in txns)
+    salary_used = sum(t["amount"] for t in txns if t["payment_source"] == "salary")
+    credit_used = sum(t["amount"] for t in txns if t["payment_source"] == "credit")
+
     days_elapsed = _days_elapsed(month)
     days_total = _days_in_month(month)
     projected = (total / days_elapsed * days_total) if days_elapsed else 0.0
@@ -52,8 +57,19 @@ def compute_metrics(month):
     )
     discretionary_pct = (discretionary_total / total * 100) if total else 0.0
 
+    savings_total = sum(
+        amount for cat, amount in by_category.items()
+        if categories.get(cat, {}).get("kind") == "saving"
+    )
+
     return {
         "total": total,
+        "monthly_salary": monthly_salary,
+        "credit_limit": credit_limit,
+        "salary_used": salary_used,
+        "salary_left": monthly_salary - salary_used,
+        "credit_used": credit_used,
+        "credit_left": credit_limit - credit_used,
         "budget": budget,
         "days_elapsed": days_elapsed,
         "days_total": days_total,
@@ -65,6 +81,7 @@ def compute_metrics(month):
         "largest": largest,
         "discretionary_total": discretionary_total,
         "discretionary_pct": discretionary_pct,
+        "savings_total": savings_total,
     }
 
 
@@ -72,14 +89,21 @@ def build_insights(month):
     m = compute_metrics(month)
     bullets = []
 
-    if m["projected"] <= m["budget"]:
+    if m["budget"]:
+        if m["projected"] <= m["budget"]:
+            bullets.append({
+                "text": f"On pace for ₹{m['projected']:,.0f}, under your ₹{m['budget']:,.0f} salary + credit.",
+                "status": "good",
+            })
+        else:
+            bullets.append({
+                "text": f"On pace for ₹{m['projected']:,.0f}, over your ₹{m['budget']:,.0f} salary + credit.",
+                "status": "watch",
+            })
+
+    if m["credit_limit"] and m["credit_used"] >= m["credit_limit"] * 0.8:
         bullets.append({
-            "text": f"On pace for ₹{m['projected']:,.0f}, under your ₹{m['budget']:,.0f} budget.",
-            "status": "good",
-        })
-    else:
-        bullets.append({
-            "text": f"On pace for ₹{m['projected']:,.0f}, over your ₹{m['budget']:,.0f} budget.",
+            "text": f"Credit usage at ₹{m['credit_used']:,.0f} of ₹{m['credit_limit']:,.0f} — getting close to the limit.",
             "status": "watch",
         })
 
@@ -106,6 +130,12 @@ def build_insights(month):
         bullets.append({
             "text": f"Discretionary spend held at {m['discretionary_pct']:.0f}% of total.",
             "status": status,
+        })
+
+    if m["savings_total"]:
+        bullets.append({
+            "text": f"Put aside ₹{m['savings_total']:,.0f} in savings/investments this month.",
+            "status": "good",
         })
 
     return bullets
