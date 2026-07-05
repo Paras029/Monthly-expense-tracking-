@@ -11,6 +11,7 @@ no API key is set or the call fails, so it never blocks or crashes.
 import json
 from datetime import date, timedelta
 
+import config
 import db
 import insights
 import parser
@@ -101,25 +102,18 @@ def generate_recap(day_str, force=False):
                 "generated_at": cached["generated_at"],
             }
 
-    client = parser.get_gemini_client()
     source = "ai"
-    if client is None:
+    if not config.GEMINI_API_KEY:
         lines = _fallback_lines(day_str)
         source = "fallback"
     else:
         try:
-            from google.genai import types
-
             data = _gather_recap_data(day_str)
             prompt = PROMPT_TEMPLATE.format(data=json.dumps(data))
-            response = client.models.generate_content(
-                model="gemini-3-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.3),
-            )
+            text = parser.call_gemini(prompt, temperature=0.3)
             lines = [
                 line.strip("-• ").strip()
-                for line in response.text.strip().splitlines()
+                for line in (text or "").strip().splitlines()
                 if line.strip()
             ]
             if not lines:

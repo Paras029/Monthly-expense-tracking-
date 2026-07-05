@@ -5,23 +5,46 @@ category can't be confidently resolved from keywords fall through to Gemini.
 """
 import re
 
+import requests
+
 import config
 import db
 
 AMOUNT_RE = re.compile(r"₹?\s*(\d[\d,]*(?:\.\d+)?)")
 
 _gemini_cache = {}
-_gemini_client = None
+
+GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 
-def get_gemini_client():
-    """Shared lazily-created client — also used by ai_insights.py so both
-    Gemini call sites (category fallback, daily recap) reuse one instance."""
-    global _gemini_client
-    if _gemini_client is None and config.GEMINI_API_KEY:
-        from google import genai
-        _gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
-    return _gemini_client
+def call_gemini(prompt, temperature=0.0):
+    """Plain REST call to the Gemini API — deliberately not the official
+    google-genai SDK. That SDK pulls in google-auth -> cryptography, a
+    package with compiled Rust native code; on Termux the PyPI wheel for
+    cryptography is built for glibc and fails to dlopen against Android's
+    Bionic libc. We only need API-key auth (no OAuth/JWT), so a bare HTTPS
+    POST via `requests` avoids that whole native-dependency chain — also
+    used by ai_insights.py, the app's other Gemini call site.
+
+    Returns the response text, or None if no API key is configured. Raises
+    on any HTTP/parsing error — callers are expected to catch and fall back.
+    """
+    if not config.GEMINI_API_KEY:
+        return None
+
+    resp = requests.post(
+        GEMINI_URL,
+        headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": temperature},
+        },
+        timeout=20,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
 def extract_amount(message):
@@ -92,27 +115,16 @@ def classify_with_gemini(note):
     if note in _gemini_cache:
         return _gemini_cache[note]
 
-    client = get_gemini_client()
-    if client is None:
-        return "Other"
-
+    category_names = db.get_category_names()
     try:
-        from google.genai import types
-
-        category_names = db.get_category_names()
         prompt = (
             "Classify this expense note into exactly one of these categories: "
             f"{', '.join(category_names)}.\n"
             f"Note: {note!r}\n"
             "Reply with only the category name, nothing else."
         )
-        response = client.models.generate_content(
-            model="gemini-3-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0),
-        )
-        guess = response.text.strip()
-        category = guess if guess in category_names else "Other"
+        guess = call_gemini(prompt, temperature=0.0)
+        category = guess.strip() if guess and guess.strip() in category_names else "Other"
     except Exception:
         category = "Other"
 

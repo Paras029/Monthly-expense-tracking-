@@ -33,14 +33,20 @@ locally in **Termux on an Android tablet**. No cloud accounts, no auth, no PC.
 - **Bot:** `python-telegram-bot` (v21+, async), long-polling
 - **Web:** `FastAPI` + `uvicorn`, serving a single static HTML dashboard
 - **DB:** `sqlite3` (stdlib), one file `ledger.db`
-- **AI (optional):** Google Gemini free tier via the `google-genai` SDK
+- **AI (optional):** Google Gemini free tier via **plain REST calls** (`requests`),
+  *not* the official `google-genai` SDK — that SDK pulls in `google-auth` →
+  `cryptography`, a package with compiled Rust native code whose PyPI wheel is built
+  for glibc and fails to `dlopen` on Termux's Bionic-libc Python. API-key auth needs no
+  OAuth/JWT signing, so a bare HTTPS POST (`parser.call_gemini()`) avoids that whole
+  native-dependency chain. Don't reintroduce `google-genai` without checking it
+  actually installs and imports cleanly on-device first.
 - **Frontend:** single `index.html` — **Tailwind (CDN)** + **Chart.js (CDN)**, dark theme
 - **Process:** one entrypoint (`main.py`) runs bot **and** server together via asyncio
 
-> ⚠️ **Verify at build time:** the Gemini SDK name/model IDs and the `python-telegram-bot`
-> API surface change over time. Before coding those parts, check the current
-> `google-genai` usage and current free Gemini model name, and the current PTB v21+
-> async API. Don't rely on memorised snippets.
+> ⚠️ **Verify at build time:** the current free Gemini model name and the
+> `python-telegram-bot` API surface change over time. Before coding those parts, check
+> the current free Gemini model name and the current PTB v21+ async API. Don't rely on
+> memorised snippets.
 
 ---
 
