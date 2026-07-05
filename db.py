@@ -40,9 +40,12 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 CREATE TABLE IF NOT EXISTS investment_snapshots (
-  month TEXT PRIMARY KEY,   -- 'YYYY-MM'
-  value REAL NOT NULL,      -- total portfolio value as of this month (manually entered)
-  note  TEXT
+  category   TEXT NOT NULL,  -- a kind='saving' category name — each is its own "vehicle"
+  month      TEXT NOT NULL,  -- 'YYYY-MM'
+  value      REAL NOT NULL,  -- total value of this vehicle as of this month (manually entered)
+  note       TEXT,
+  updated_at TEXT,           -- when this snapshot was last set, for "updated N days ago"
+  PRIMARY KEY (category, month)
 );
 
 CREATE TABLE IF NOT EXISTS ai_recaps (
@@ -106,10 +109,35 @@ def _migrate_investments_kind(conn):
     )
 
 
+def _migrate_investment_snapshots(conn):
+    # old shape (single global vehicle): month TEXT PRIMARY KEY, value, note.
+    # New shape tracks multiple vehicles, keyed by (category, month). CREATE
+    # TABLE IF NOT EXISTS above is a no-op against an existing old-shape
+    # table, so detect and migrate it explicitly here.
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(investment_snapshots)")}
+    if not cols or "category" in cols:
+        return
+    old_rows = conn.execute("SELECT month, value, note FROM investment_snapshots").fetchall()
+    conn.execute("ALTER TABLE investment_snapshots RENAME TO investment_snapshots_old")
+    conn.execute(
+        "CREATE TABLE investment_snapshots ("
+        "  category TEXT NOT NULL, month TEXT NOT NULL, value REAL NOT NULL, "
+        "  note TEXT, updated_at TEXT, PRIMARY KEY (category, month))"
+    )
+    for row in old_rows:
+        # the only vehicle that existed before was always 'Investments'
+        conn.execute(
+            "INSERT INTO investment_snapshots (category, month, value, note) VALUES (?, ?, ?, ?)",
+            ("Investments", row["month"], row["value"], row["note"]),
+        )
+    conn.execute("DROP TABLE investment_snapshots_old")
+
+
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
         _migrate_transactions(conn)
+        _migrate_investment_snapshots(conn)
 
         for name, meta in config.DEFAULT_CATEGORIES.items():
             conn.execute(
@@ -164,6 +192,37 @@ def get_last_transaction():
             "SELECT * FROM transactions ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_transaction(txn_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM transactions WHERE id = ?", (txn_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_transaction(txn_id, category=None, note=None, amount=None,
+                        payment_source=None, recurrence=None, spent_on=None):
+    """Full edit of a logged transaction from the dashboard. Any field left
+    as None keeps its current value. Clears `guessed` since an edit is an
+    explicit human correction, not a Gemini fallback anymore."""
+    with get_conn() as conn:
+        current = conn.execute("SELECT * FROM transactions WHERE id = ?", (txn_id,)).fetchone()
+        if not current:
+            return False
+        conn.execute(
+            "UPDATE transactions SET category = ?, note = ?, amount = ?, "
+            "payment_source = ?, recurrence = ?, spent_on = ?, guessed = 0 WHERE id = ?",
+            (
+                category if category is not None else current["category"],
+                note if note is not None else current["note"],
+                amount if amount is not None else current["amount"],
+                payment_source if payment_source is not None else current["payment_source"],
+                recurrence if recurrence is not None else current["recurrence"],
+                spent_on if spent_on is not None else current["spent_on"],
+                txn_id,
+            ),
+        )
+        return True
 
 
 def delete_transaction(txn_id):
@@ -238,21 +297,50 @@ def get_monthly_totals(months, kind=None, category=None):
         return out
 
 
-def get_cumulative_savings_contributions(months):
+def get_cumulative_savings_contributions(months, category=None):
     """Returns [{month, contributed}] where contributed is the all-time
-    running total of kind='saving' transactions through the end of that
-    month (not just that month's own contribution)."""
+    running total through the end of that month (not just that month's own
+    contribution) — of kind='saving' transactions, or of one category's
+    transactions if `category` is given (for a single investment vehicle)."""
     with get_conn() as conn:
         out = []
         for month in months:
+            if category:
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions "
+                    "WHERE category = ? AND spent_on <= ?",
+                    (category, f"{month}-31"),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(t.amount), 0) AS total FROM transactions t "
+                    "JOIN categories c ON c.name = t.category "
+                    "WHERE c.kind = 'saving' AND t.spent_on <= ?",
+                    (f"{month}-31",),
+                ).fetchone()
+            out.append({"month": month, "contributed": row["total"]})
+        return out
+
+
+def get_cumulative_balance_by_kind(kind, through_month=None):
+    """All-time cumulative sum of transactions whose category has this kind
+    (e.g. 'liquid' for the liquid fund balance, 'saving' for total savings),
+    optionally only counting through the end of a given month."""
+    with get_conn() as conn:
+        if through_month:
             row = conn.execute(
                 "SELECT COALESCE(SUM(t.amount), 0) AS total FROM transactions t "
                 "JOIN categories c ON c.name = t.category "
-                "WHERE c.kind = 'saving' AND t.spent_on <= ?",
-                (f"{month}-31",),
+                "WHERE c.kind = ? AND t.spent_on <= ?",
+                (kind, f"{through_month}-31"),
             ).fetchone()
-            out.append({"month": month, "contributed": row["total"]})
-        return out
+        else:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(t.amount), 0) AS total FROM transactions t "
+                "JOIN categories c ON c.name = t.category WHERE c.kind = ?",
+                (kind,),
+            ).fetchone()
+        return row["total"]
 
 
 def get_fixed_monthly_costs():
@@ -390,24 +478,45 @@ def set_setting(key, value):
         )
 
 
-# ---- investment snapshots (long-term portfolio tracking) -----------------
+# ---- investment snapshots (long-term, per-vehicle portfolio tracking) ----
 
-def get_investment_snapshots():
-    """Returns {month: {value, note}} for every manually-entered snapshot."""
+def get_investment_snapshots(category):
+    """Returns {month: {value, note, updated_at}} for one vehicle."""
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT month, value, note FROM investment_snapshots ORDER BY month"
+            "SELECT month, value, note, updated_at FROM investment_snapshots "
+            "WHERE category = ? ORDER BY month",
+            (category,),
         ).fetchall()
-        return {r["month"]: {"value": r["value"], "note": r["note"]} for r in rows}
+        return {
+            r["month"]: {"value": r["value"], "note": r["note"], "updated_at": r["updated_at"]}
+            for r in rows
+        }
 
 
-def set_investment_snapshot(month, value, note=None):
+def get_latest_investment_snapshot(category):
+    """Most recent snapshot for a vehicle, or None if it's never been set."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT month, value, note, updated_at FROM investment_snapshots "
+            "WHERE category = ? ORDER BY month DESC LIMIT 1",
+            (category,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_investment_snapshot(category, month, value, note=None):
+    """Returns the updated_at timestamp that was written."""
+    updated_at = datetime.now().isoformat(timespec="seconds")
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO investment_snapshots (month, value, note) VALUES (?, ?, ?) "
-            "ON CONFLICT(month) DO UPDATE SET value = excluded.value, note = excluded.note",
-            (month, value, note),
+            "INSERT INTO investment_snapshots (category, month, value, note, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(category, month) DO UPDATE SET value = excluded.value, "
+            "note = excluded.note, updated_at = excluded.updated_at",
+            (category, month, value, note, updated_at),
         )
+    return updated_at
 
 
 # ---- AI daily recap (cached, at most once/day unless force-refreshed) ----

@@ -37,9 +37,19 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
   `http://<tablet-lan-ip>:8000` from a phone on the same wifi.
 - **Manage categories:** use the 🏷 Categories panel on the dashboard to
   add/edit/delete categories, colors, monthly caps, and keyword aliases — no
-  code editing needed.
+  code editing needed. Kind `saving` = a long-term investment vehicle (SIP,
+  gold plan, FDs — each tracked independently); kind `liquid` = an
+  emergency/liquid cash fund (rolls up into the "Liquid fund" card at top).
+- **Edit or delete a logged expense:** on the dashboard, tap ✎ next to any
+  row in Recent Activity — change its category, note, amount, date, payment
+  source, or fixed/yearly tag, or delete it outright.
+- **Track multiple investments:** add a vehicle from the Long-term
+  investments section (or 🏷 Categories, kind `saving`) and update each
+  one's current value independently — the dashboard shows how long ago each
+  was last updated.
 - **Bot commands:** `/start`, `/undo`, `/cat <Category>`, `/today`, `/month`,
-  `/insights`, `/salary <amount>`, `/credit <amount>`.
+  `/insights`, `/salary <amount>`, `/credit <amount>`,
+  `/portfolio <vehicle> <amount>`, `/recap`.
 
 ## Without a Telegram bot token
 

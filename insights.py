@@ -44,16 +44,18 @@ def compute_metrics(month):
         by_category.setdefault(t["category"], 0.0)
         by_category[t["category"]] += t["amount"]
 
-    # "spend" excludes kind='saving' categories (e.g. Investments) — money that
-    # left the account still counts fully against salary/credit above, but the
-    # "where the money goes" pie and top-category card are about
-    # discretionary/essential spending habits, not SIP contributions.
+    # "spend" excludes kind='saving' (e.g. Investments) and kind='liquid'
+    # (an emergency/liquid fund) — money that left the account still counts
+    # fully against salary/credit above, but the "where the money goes" pie
+    # and top-category card are about discretionary/essential spending
+    # habits, not SIP contributions or cash you deliberately set aside.
+    NON_SPEND_KINDS = {"saving", "liquid"}
     by_category_spend = {
         cat: amount for cat, amount in by_category.items()
-        if categories.get(cat, {}).get("kind") != "saving"
+        if categories.get(cat, {}).get("kind") not in NON_SPEND_KINDS
     }
     spend_total = sum(by_category_spend.values())
-    spend_txns = [t for t in txns if categories.get(t["category"], {}).get("kind") != "saving"]
+    spend_txns = [t for t in txns if categories.get(t["category"], {}).get("kind") not in NON_SPEND_KINDS]
 
     top_category = None
     top_amount = 0.0
@@ -95,6 +97,11 @@ def compute_metrics(month):
         if categories.get(cat, {}).get("kind") == "saving"
     )
 
+    liquid_total = sum(
+        amount for cat, amount in by_category.items()
+        if categories.get(cat, {}).get("kind") == "liquid"
+    )
+
     return {
         "total": total,
         "spend_total": spend_total,
@@ -122,6 +129,7 @@ def compute_metrics(month):
         "discretionary_total": discretionary_total,
         "discretionary_pct": discretionary_pct,
         "savings_total": savings_total,
+        "liquid_total": liquid_total,
     }
 
 

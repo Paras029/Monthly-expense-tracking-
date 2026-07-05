@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE TABLE IF NOT EXISTS categories (
   name         TEXT PRIMARY KEY,
   color        TEXT NOT NULL,         -- hex, used by charts
-  kind         TEXT NOT NULL,         -- 'essential' | 'discretionary' | 'saving'
+  kind         TEXT NOT NULL,         -- 'essential' | 'discretionary' | 'saving' | 'liquid'
   monthly_cap  REAL                   -- budget for Budgets & Alerts (nullable)
 );
 
@@ -122,9 +122,12 @@ CREATE TABLE IF NOT EXISTS settings (
 -- seed: monthly_salary=60000, credit_limit=0, currency='INR', timezone='Asia/Kolkata'
 
 CREATE TABLE IF NOT EXISTS investment_snapshots (
-  month TEXT PRIMARY KEY,   -- 'YYYY-MM'
-  value REAL NOT NULL,      -- total portfolio value as of this month (manually entered)
-  note  TEXT
+  category   TEXT NOT NULL,  -- a kind='saving' category name — each is its own "vehicle"
+  month      TEXT NOT NULL,  -- 'YYYY-MM'
+  value      REAL NOT NULL,  -- total value of this vehicle as of this month (manually entered)
+  note       TEXT,
+  updated_at TEXT,           -- when last set, for "updated N days ago"
+  PRIMARY KEY (category, month)
 );
 ```
 
@@ -141,21 +144,30 @@ CREATE TABLE IF NOT EXISTS investment_snapshots (
 | Investments | `#eab308` | saving        | sip, index fund, stocks, mutual fund |
 | Other       | `#64748b` | discretionary | (fallback bucket)                    |
 
-`kind = 'saving'` categories still count fully against salary/credit like any other
-expense — they're money that actually left your account — but are *also* summed into
-the dedicated Savings & Investments chart on the dashboard, so contributions don't get
-lost among regular spending categories. They're **excluded** from the "where the money
-goes" donut, the Top category card, and the "largest single hit" insight, since those
-are about discretionary/essential spending habits, not SIP contributions — a big
-Investments transaction isn't a "hit" you'd want to cut. `compute_metrics()` exposes
-both `total` (all spend, including savings — used for salary/credit tracking) and
-`spend_total` (excludes `kind='saving'` — used for the donut/top-category/largest-hit).
+`kind = 'saving'` (a long-term investment vehicle — SIP, a gold plan, fixed deposits)
+and `kind = 'liquid'` (an emergency/liquid cash fund) categories still count fully
+against salary/credit like any other expense — they're money that actually left your
+account — but are **excluded** from the "where the money goes" donut, the Top category
+card, and the "largest single hit"/"cutting X% saves Y" insights (`NON_SPEND_KINDS` in
+`insights.py`), since those are about discretionary/essential spending habits, not SIP
+contributions or cash you deliberately set aside — neither is a "hit" you'd cut.
+`compute_metrics()` exposes both `total` (all spend, including saving/liquid — used for
+salary/credit tracking) and `spend_total` (excludes both — used for the
+donut/top-category/largest-hit). Each `kind='saving'` category also gets its own
+cumulative all-time balance card and its own row in Long-term investments; each
+`kind='liquid'` category rolls up into the single "Liquid fund" balance card at the top
+of the dashboard (§8).
 
-`investment_snapshots` powers **long-term investment tracking**: since there's no way
-to pull real brokerage/mutual-fund values, the user manually logs their total portfolio
-value once a month (via `/portfolio <amount>` or the dashboard). The dashboard then
-charts that against the automatically-computed cumulative sum of `kind='saving'`
-transactions ("contributed") — the gap between the two lines is gain or loss.
+`investment_snapshots` powers **long-term investment tracking, per vehicle**: since
+there's no way to pull real brokerage/mutual-fund values, the user manually logs each
+vehicle's total value once in a while (via `/portfolio <vehicle> <amount>` or the
+dashboard's per-vehicle "Update value" field) — every `kind='saving'` category is
+tracked independently (its own cumulative contribution, its own value history, its own
+"updated N days ago"), since a user may run several vehicles (a SIP, a gold scheme, FDs)
+that shouldn't be conflated into one blended number. The dashboard also shows a combined
+trend: cumulative contributed vs. summed value across vehicles, forward-filling each
+vehicle's last known value between updates (`GET /api/investments`) — the gap is gain
+or loss.
 
 Keyword→category aliases are seeded from `config.CATEGORY_KEYWORDS` into the `keywords`
 table on first run, then live entirely in the DB from that point on — editable from the
@@ -216,7 +228,10 @@ gym membership 12000 yearly      -> recurrence=yearly (annual cross-cutting)
 8. If **no amount** found → reply asking user to include a number; do not write a row.
 
 **Gemini fallback (only when step 7 triggers, and only if `GEMINI_API_KEY` set):**
-- Prompt: given the note text and the fixed list of category names, return exactly one
+- Prompt: category names + each category's example keywords (both pulled fresh from the
+  DB, not `config.py`'s defaults — so categories the user added/renamed via the
+  dashboard classify correctly too, including custom ones like "Gold Plan" whose name
+  alone wouldn't hint at what belongs there) plus the note text; return exactly one
   category name as plain text. Low temperature. Cache identical notes in-memory.
 - If no API key or the call fails → assign `Other` and flag the row (still log it).
 
@@ -247,7 +262,7 @@ user id (the bot is public once created; this keeps strangers from injecting dat
 | `/insights`         | run + send the monthly insight bullets (see §9)               |
 | `/salary <amount>`  | set monthly salary (no arg = show current value)               |
 | `/credit <amount>`  | set credit limit (no arg = show current value)                 |
-| `/portfolio <amount>` | log this month's total investment/portfolio value (no arg = show current value) |
+| `/portfolio <vehicle> <amount>` | log this month's value for one investment vehicle, e.g. `/portfolio Investments 150000` (no args = list all vehicles + when each was last updated) |
 | `/recap` (or `/recap refresh`) | AI day-by-day + cumulative analysis (see §9); cached once/day, `refresh` forces a new one |
 
 ---
@@ -258,16 +273,27 @@ Dark theme, matching the reference screenshots. Single HTML file, Tailwind + Cha
 via CDN, vanilla JS `fetch` to the API. A month selector (default = current month)
 re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rupee went."**
 
+A horizontal quick-nav pill bar under the header anchor-jumps between sections, since
+the page has grown long. Headings use a serif display face (Fraunces, Google Fonts CDN)
+against an Inter sans body — falls back to system serif/sans if the font CDN is
+unreachable, a pure-CSS fallback with no JS failure mode (unlike Chart.js/Tailwind).
+
 **Sections (top to bottom):**
 
-1. **Four summary cards**
+1. **Four summary cards** — these are about *where money is sitting*, not spending
+   patterns (which move to §2 instead):
    - *Salary* — used + `X% of ₹SALARY used` + thin progress bar.
    - *Credit* — used + `X% of ₹CREDIT_LIMIT used` + thin progress bar (red when over).
-   - *Top category* — name + amount + `% of spend`.
-   - *Projected month-end* — `spent / days_elapsed × days_in_month`, with `₹/day pace`.
+   - *Savings* — cumulative all-time balance across all `kind='saving'` categories +
+     `+₹X this month`.
+   - *Liquid fund* — cumulative all-time balance across all `kind='liquid'` categories +
+     `+₹X this month` — a deliberately-set-aside emergency/liquid cash reserve, tracked
+     separately from long-term investments since it's meant to stay accessible, not grow.
 
 2. **Where the money goes** — donut chart (Chart.js), total in center, legend list of
-   categories with amount + %. Colors from `categories.color`.
+   categories with amount + %, plus *Top category* and *Projected month-end* as inline
+   stats below the legend (moved here from the old top-card row — they're about
+   spending patterns, which this section already covers).
 
 3. **Spending insights** — bullet list from `insights.py` (see §9). Small status icon
    per bullet (✓ good / ⚠ watch / → note).
@@ -291,11 +317,16 @@ re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rup
    category dropdown as §4), and the same for `kind='saving'` categories only, plus a
    "₹X saved this month" stat.
 
-6. **Long-term investments** — line chart: cumulative `kind='saving'` contributions
-   (computed automatically) vs a manually-entered portfolio value per month (there's
-   no way to pull real brokerage/fund data, so the user logs it once a month via
-   `/portfolio <amount>` or a dashboard input). The gap between the two lines is the
-   gain or loss, shown as a stat (`₹X` and `%`) above the chart.
+6. **Long-term investments** — each `kind='saving'` category is an independent
+   "vehicle" (a SIP, a gold plan, fixed deposits, ...). A combined line chart shows
+   cumulative contributed (computed automatically) vs. summed current value across all
+   vehicles (forward-filled between updates — a vehicle not updated this month keeps
+   its last known value rather than dropping to zero); below it, a per-vehicle list
+   shows each one's own contributed/value/gain and *"updated N days ago"* (amber if
+   stale, >45 days), with an inline field to update that vehicle's value. "+ Add
+   investment" opens a lightweight modal that just creates a new `kind='saving'`
+   category (equivalent to doing it from 🏷 Categories, but one tap closer since it's a
+   very expected action from this section).
 
 7. **Fixed & recurring expenses** — split by cadence: **Monthly fixed** shows only the
    latest logged instance of each distinct (category, note) pair tagged
@@ -312,13 +343,23 @@ re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rup
    `WATCH` tag near the cap, `ON TRACK` when comfortably under.
 
 9. **Recent activity** — table: Date · Category (colored dot) · Note · Payment source
-   (💰 Salary / 💳 Credit) · Amount. `recurrence='monthly'` rows get a small "fixed"
-   badge, `recurrence='yearly'` rows get a "yearly" badge, next to the date. Subtitle:
-   "Latest entries logged from Telegram." Most recent first.
+   (💰 Salary / 💳 Credit) · Amount · **✎ edit**. `recurrence='monthly'` rows get a small
+   "fixed" badge, `recurrence='yearly'` rows get a "yearly" badge, next to the date.
+   Subtitle: "Latest entries logged from Telegram. Tap ✎ to edit." Most recent first.
+   The edit button opens a modal (category/note/amount/date/payment
+   source/recurrence, all editable) that persists via `PUT /api/transactions/{id}`, plus
+   a Delete action via `DELETE /api/transactions/{id}` — this is the one place besides
+   `/cat` and `/undo` that can change an already-logged transaction, and unlike those two
+   bot commands it works on *any* past row, not just the most recent one.
 
 10. **🏷 Categories panel** (modal) — add/edit/delete categories (color, kind, monthly
     cap) and their keyword aliases, backed by the `categories`/`keywords` tables via
-    `/api/categories`. No code editing required to add a category.
+    `/api/categories`. No code editing required to add a category. Kind is one of
+    `essential`/`discretionary`/`saving`/`liquid`. Keyword add has both an Enter-key
+    handler and a visible "+ Add" button — Android software keyboards don't reliably
+    fire a `keydown`/Enter event, so the button is the dependable path; adding a keyword
+    patches just that category's chip list in place (no full modal re-render) so the
+    input keeps focus for adding several keywords in a row.
 
 11. **⚙ Settings panel** (modal) — edit `monthly_salary` and `credit_limit` via
     `/api/settings`. Also settable from Telegram with `/salary` and `/credit`.
@@ -330,18 +371,20 @@ plain JSON, since none of that depends on the chart library being present.
 
 **API endpoints (`server.py`, all accept `?month=YYYY-MM`, default current):**
 ```
-GET  /api/summary                        -> cards + category breakdown (excl. savings) + pace + insights inputs
+GET  /api/summary                        -> cards (incl. savings/liquid balances) + category breakdown (excl. saving/liquid) + pace + insights inputs
 GET  /api/insights                       -> list of insight bullet strings + status
 GET  /api/recap                          -> cached AI daily recap {lines, source, generated_at}
 POST /api/recap/refresh                  -> force-regenerate today's recap (bypasses cache)
 GET  /api/daily-burn                     -> [{day, cumulative}], plus reference-line params; ?category= to filter
 GET  /api/monthly                        -> last 6 months total outflow; ?category= to filter to one category
 GET  /api/savings                        -> last 6 months total for kind='saving' categories
-GET  /api/investments                    -> last N months' cumulative contributed vs manually-entered value + gain/loss
-POST /api/investments                    -> upsert {month, value, note} portfolio snapshot
+GET  /api/investments                    -> per-vehicle {vehicles: [...], combined_months, total_contributed, total_value, total_gain}
+POST /api/investments                    -> upsert {category, month, value, note} snapshot for one vehicle
 GET  /api/recurring                      -> {monthly, yearly, monthly_total, yearly_total, monthly_equivalent_total}
 GET  /api/budgets                        -> [{category, cap, spent, status}]
 GET  /api/transactions                   -> recent rows for the activity table
+PUT  /api/transactions/{id}              -> edit any field of a logged transaction
+DEL  /api/transactions/{id}              -> delete a logged transaction
 GET  /api/categories                     -> categories with their keyword lists
 POST /api/categories                     -> add a category
 PUT  /api/categories/{name}              -> update color/kind/cap
@@ -359,8 +402,8 @@ Bind uvicorn to `0.0.0.0:8000` so the tablet's LAN IP works from the phone.
 
 Compute the **metrics with plain Python** (deterministic, free, no Gemini call here at
 all) and phrase them with string templates. `discretionary_pct` divides by `spend_total`
-(excludes `kind='saving'`), not `total` — otherwise a big SIP payment inflates the base
-and understates the real ratio.
+(excludes `NON_SPEND_KINDS = {'saving', 'liquid'}`), not `total` — otherwise a big SIP
+payment or a liquid-fund transfer inflates the base and understates the real ratio.
 
 **Metrics to compute** (mirror the reference insights):
 - On-pace check: projected month-end vs (salary + credit_limit) → "On pace for ₹X,
@@ -463,4 +506,7 @@ bash run.sh
 - **WhatsApp** — future option. Because ingestion is isolated in `bot.py`, swapping to
   WhatsApp (Cloud API webhook, or an unofficial QR library) should touch nothing else.
   Do **not** build it now.
-- **Editing arbitrary past transactions in the UI** — v1 edits happen via bot commands.
+- **Bot-side transaction editing** — full edits (category, note, amount, date, payment
+  source, recurrence) happen via the dashboard's Recent Activity ✎ button + `PUT
+  /api/transactions/{id}` (§8). `/cat` and `/undo` remain the quick bot-side corrections
+  for the *last* transaction only; there's no bot command to edit an arbitrary past row.

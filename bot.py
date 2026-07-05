@@ -88,8 +88,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/insights — monthly insight bullets\n"
         "/salary <amount> — set your monthly salary\n"
         "/credit <amount> — set your credit limit\n"
-        "/portfolio <amount> — log this month's total investment value "
-        "(for gain/loss tracking vs what you've contributed)\n"
+        "/portfolio <vehicle> <amount> — log this month's value for one investment "
+        "vehicle (e.g. /portfolio Investments 150000); no args lists all vehicles\n"
         "/recap — AI day-by-day + cumulative spending analysis (cached once/day; "
         "/recap refresh to force a new one)"
     )
@@ -206,27 +206,56 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from datetime import date
 
     month = date.today().strftime("%Y-%m")
+    saving_categories = {c["name"]: c["name"] for c in db.get_categories() if c["kind"] == "saving"}
+    saving_by_lower = {name.lower(): name for name in saving_categories}
+
     if not context.args:
-        snapshots = db.get_investment_snapshots()
-        current = snapshots.get(month)
-        if current:
+        # list every vehicle's latest value + how stale it is
+        if not saving_categories:
             await update.message.reply_text(
-                f"Portfolio value for {month} is {_fmt_amount(current['value'])}. Usage: /portfolio <amount>"
+                "No investment vehicles yet — add a category with kind 'saving' "
+                "(e.g. Investments, Gold Plan, Fixed Deposits) in the dashboard's 🏷 Categories panel."
+            )
+            return
+        lines = ["Investment vehicles:"]
+        for name in saving_categories:
+            latest = db.get_latest_investment_snapshot(name)
+            if latest:
+                days_ago = (date.today() - date.fromisoformat(latest["updated_at"][:10])).days
+                lines.append(f"  {name}: {_fmt_amount(latest['value'])} (updated {days_ago}d ago)")
+            else:
+                lines.append(f"  {name}: no value logged yet")
+        lines.append("\nUsage: /portfolio <vehicle> <amount>, e.g. /portfolio Investments 150000")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage: /portfolio <vehicle> <amount>, e.g. /portfolio Investments 150000\n"
+            "Run /portfolio with no arguments to see your vehicle names."
+        )
+        return
+
+    *name_parts, amount_str = context.args
+    vehicle_input = " ".join(name_parts)
+    vehicle = saving_by_lower.get(vehicle_input.lower())
+    if not vehicle:
+        if saving_categories:
+            await update.message.reply_text(
+                f"Unknown vehicle {vehicle_input!r}. Choose one of: {', '.join(saving_categories)}"
             )
         else:
             await update.message.reply_text(
-                "No portfolio value logged for this month yet. Usage: /portfolio <amount>\n"
-                "This is your total investment/portfolio value right now (contributions + returns), "
-                "logged once a month — used to track gains/losses vs what you've actually put in."
+                "No investment vehicles yet — add a category with kind 'saving' first."
             )
         return
     try:
-        amount = float(context.args[0].replace(",", ""))
+        amount = float(amount_str.replace(",", ""))
     except ValueError:
-        await update.message.reply_text("Usage: /portfolio <amount>, e.g. /portfolio 150000")
+        await update.message.reply_text("Usage: /portfolio <vehicle> <amount>, e.g. /portfolio Investments 150000")
         return
-    db.set_investment_snapshot(month, amount)
-    await update.message.reply_text(f"Portfolio value for {month} set to {_fmt_amount(amount)}.")
+    db.set_investment_snapshot(vehicle, month, amount)
+    await update.message.reply_text(f"{vehicle} value for {month} set to {_fmt_amount(amount)}.")
 
 
 async def cmd_insights(update: Update, context: ContextTypes.DEFAULT_TYPE):

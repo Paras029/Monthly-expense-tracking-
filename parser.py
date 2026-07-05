@@ -121,17 +121,35 @@ def strip_note(message, spans):
 
 def classify_with_gemini(note):
     """Ask Gemini for exactly one category name; falls back to 'Other' on
-    any error so a flaky API never blocks logging a transaction."""
+    any error so a flaky API never blocks logging a transaction.
+
+    The category list and their example keywords are pulled fresh from the
+    DB on every call (not the config.py defaults), so categories the user
+    added or renamed via the dashboard's Categories panel are classified
+    correctly too — including custom ones (e.g. "Gold Plan") whose name
+    alone wouldn't hint at what belongs there without its keywords.
+    """
     if note in _gemini_cache:
         return _gemini_cache[note]
 
     category_names = db.get_category_names()
+    keywords_by_category = db.get_keywords_by_category()
     try:
+        category_hints = "\n".join(
+            f"- {name}" + (
+                f" (examples: {', '.join(keywords_by_category[name][:6])})"
+                if keywords_by_category.get(name) else ""
+            )
+            for name in category_names
+        )
         prompt = (
-            "Classify this expense note into exactly one of these categories: "
-            f"{', '.join(category_names)}.\n"
+            "Classify this personal expense note into exactly one of the categories "
+            "below. These categories were defined by the user and may include custom "
+            "ones beyond common names — use each category's example keywords as a "
+            "hint for what belongs in it.\n\n"
+            f"{category_hints}\n\n"
             f"Note: {note!r}\n"
-            "Reply with only the category name, nothing else."
+            "Reply with only the category name from the list above, nothing else."
         )
         guess = call_gemini(prompt, temperature=0.0)
         category = guess.strip() if guess and guess.strip() in category_names else "Other"

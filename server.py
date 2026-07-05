@@ -1,7 +1,7 @@
 """FastAPI app: JSON API for the dashboard + serves the static index.html.
-Only the category/keyword/settings management endpoints write to the DB —
-transactions themselves are still only ever created by the Telegram bot."""
-from datetime import date
+Only the category/keyword/settings/transaction-edit endpoints write to the
+DB — new transactions are still only ever created by the Telegram bot."""
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -61,6 +61,12 @@ def api_summary(month: str = Query(default=None)):
     per_day_left = (combined_left / days_left) if days_left else 0.0
     pace_per_day = (m["total"] / m["days_elapsed"]) if m["days_elapsed"] else 0.0
 
+    # cumulative, all-time balances (through the end of the selected month) —
+    # these power the top Savings/Liquid Fund cards, distinct from
+    # savings_total/liquid_total which are just *this month's* contribution.
+    savings_balance = db.get_cumulative_balance_by_kind("saving", through_month=month)
+    liquid_balance = db.get_cumulative_balance_by_kind("liquid", through_month=month)
+
     return {
         "month": month,
         "spent": m["total"],
@@ -81,6 +87,9 @@ def api_summary(month: str = Query(default=None)):
         "top_amount": m["top_amount"],
         "top_pct": m["top_pct"],
         "savings_total": m["savings_total"],
+        "savings_balance": savings_balance,
+        "liquid_total": m["liquid_total"],
+        "liquid_balance": liquid_balance,
         "breakdown": breakdown,
     }
 
@@ -179,40 +188,87 @@ def api_recurring():
 
 @app.get("/api/investments")
 def api_investments(month: str = Query(default=None), n: int = Query(default=12)):
-    """Long-term investment tracking: cumulative SIP/stocks/etc contributions
-    (computed automatically from kind='saving' transactions) vs the actual
-    portfolio value (manually entered, since we can't fetch real market data)."""
+    """Long-term investment tracking, per vehicle: each kind='saving' category
+    (SIP, a gold plan, FDs, ...) is tracked independently — its own
+    automatically-computed cumulative contribution, its own manually-updated
+    current value, and how long ago that value was last updated. Also
+    returns a combined trend (contributed vs value summed across vehicles,
+    forward-filling each vehicle's last known value between updates) for a
+    single overview chart."""
     month = month or _current_month()
     months = _last_n_months(n, month)
-    contributed_by_month = {
-        c["month"]: c["contributed"] for c in db.get_cumulative_savings_contributions(months)
-    }
-    snapshots = db.get_investment_snapshots()
+    saving_categories = [c for c in db.get_categories() if c["kind"] == "saving"]
 
-    out = [
+    combined_contributed = {m: 0.0 for m in months}
+    combined_value = {m: 0.0 for m in months}
+    combined_value_known = {m: False for m in months}
+
+    vehicles = []
+    for cat in saving_categories:
+        name = cat["name"]
+        contributed_by_month = {
+            row["month"]: row["contributed"]
+            for row in db.get_cumulative_savings_contributions(months, category=name)
+        }
+        snapshots = db.get_investment_snapshots(name)
+        latest_snapshot = db.get_latest_investment_snapshot(name)
+
+        carry = None
+        for m in months:
+            if m in snapshots:
+                carry = snapshots[m]["value"]
+            combined_contributed[m] += contributed_by_month.get(m, 0.0)
+            if carry is not None:
+                combined_value[m] += carry
+                combined_value_known[m] = True
+
+        latest_contributed = contributed_by_month.get(months[-1], 0.0) if months else 0.0
+        latest_value = latest_snapshot["value"] if latest_snapshot else None
+        updated_at = latest_snapshot["updated_at"] if latest_snapshot else None
+        updated_days_ago = None
+        if updated_at:
+            updated_days_ago = (date.today() - datetime.fromisoformat(updated_at).date()).days
+        gain = (latest_value - latest_contributed) if latest_value is not None else None
+        gain_pct = (gain / latest_contributed * 100) if gain is not None and latest_contributed else None
+
+        vehicles.append({
+            "category": name,
+            "color": cat["color"],
+            "contributed": latest_contributed,
+            "latest_value": latest_value,
+            "updated_at": updated_at,
+            "updated_days_ago": updated_days_ago,
+            "gain": gain,
+            "gain_pct": gain_pct,
+        })
+
+    vehicles.sort(key=lambda v: -v["contributed"])
+
+    combined_months = [
         {
             "month": m,
-            "contributed": contributed_by_month.get(m, 0.0),
-            "value": snapshots.get(m, {}).get("value"),
+            "contributed": combined_contributed[m],
+            "value": combined_value[m] if combined_value_known[m] else None,
         }
         for m in months
     ]
-
-    latest_value = next((row["value"] for row in reversed(out) if row["value"] is not None), None)
-    latest_contributed = out[-1]["contributed"] if out else 0.0
-    gain = (latest_value - latest_contributed) if latest_value is not None else None
-    gain_pct = (gain / latest_contributed * 100) if gain is not None and latest_contributed else None
+    total_contributed = combined_contributed[months[-1]] if months else 0.0
+    total_value = combined_value[months[-1]] if months and combined_value_known[months[-1]] else None
+    total_gain = (total_value - total_contributed) if total_value is not None else None
+    total_gain_pct = (total_gain / total_contributed * 100) if total_gain is not None and total_contributed else None
 
     return {
-        "months": out,
-        "latest_value": latest_value,
-        "latest_contributed": latest_contributed,
-        "gain": gain,
-        "gain_pct": gain_pct,
+        "vehicles": vehicles,
+        "combined_months": combined_months,
+        "total_contributed": total_contributed,
+        "total_value": total_value,
+        "total_gain": total_gain,
+        "total_gain_pct": total_gain_pct,
     }
 
 
 class InvestmentSnapshotIn(BaseModel):
+    category: str
     month: str
     value: float
     note: Optional[str] = None
@@ -220,8 +276,13 @@ class InvestmentSnapshotIn(BaseModel):
 
 @app.post("/api/investments")
 def api_add_investment_snapshot(body: InvestmentSnapshotIn):
-    db.set_investment_snapshot(body.month, body.value, body.note)
-    return {"ok": True}
+    categories = {c["name"]: c for c in db.get_categories()}
+    if body.category not in categories:
+        raise HTTPException(404, f"Category {body.category!r} not found")
+    if categories[body.category]["kind"] != "saving":
+        raise HTTPException(400, f"{body.category!r} is not a 'saving' category")
+    updated_at = db.set_investment_snapshot(body.category, body.month, body.value, body.note)
+    return {"ok": True, "updated_at": updated_at}
 
 
 @app.get("/api/budgets")
@@ -261,6 +322,45 @@ def api_transactions(month: str = Query(default=None), limit: int = Query(defaul
     return {"month": month, "transactions": txns[:limit]}
 
 
+class TransactionUpdate(BaseModel):
+    category: Optional[str] = None
+    note: Optional[str] = None
+    amount: Optional[float] = None
+    payment_source: Optional[str] = None
+    recurrence: Optional[str] = None
+    spent_on: Optional[str] = None
+
+
+@app.put("/api/transactions/{txn_id}")
+def api_update_transaction(txn_id: int, body: TransactionUpdate):
+    if not db.get_transaction(txn_id):
+        raise HTTPException(404, f"Transaction {txn_id} not found")
+    if body.category is not None and body.category not in db.get_category_names():
+        raise HTTPException(400, f"Category {body.category!r} not found")
+    if body.payment_source is not None and body.payment_source not in {"salary", "credit"}:
+        raise HTTPException(400, "payment_source must be 'salary' or 'credit'")
+    if body.recurrence is not None and body.recurrence not in {"one-off", "monthly", "yearly"}:
+        raise HTTPException(400, "recurrence must be 'one-off', 'monthly', or 'yearly'")
+    db.update_transaction(
+        txn_id,
+        category=body.category,
+        note=body.note,
+        amount=body.amount,
+        payment_source=body.payment_source,
+        recurrence=body.recurrence,
+        spent_on=body.spent_on,
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/transactions/{txn_id}")
+def api_delete_transaction(txn_id: int):
+    if not db.get_transaction(txn_id):
+        raise HTTPException(404, f"Transaction {txn_id} not found")
+    db.delete_transaction(txn_id)
+    return {"ok": True}
+
+
 # ---- category & keyword management ---------------------------------------
 
 class CategoryIn(BaseModel):
@@ -281,7 +381,7 @@ class KeywordIn(BaseModel):
     keyword: str
 
 
-VALID_KINDS = {"essential", "discretionary", "saving"}
+VALID_KINDS = {"essential", "discretionary", "saving", "liquid"}
 
 
 @app.get("/api/categories")

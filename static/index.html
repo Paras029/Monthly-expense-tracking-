@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Personal Cashflow Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
@@ -13,114 +16,175 @@
       theme: {
         extend: {
           colors: {
-            surface: '#0f1117',
-            panel: '#171a23',
-            border: '#262a36',
+            surface: '#0c0e14',
+            panel: '#151822',
+            border: '#262a38',
             muted: '#8b8fa3',
-          }
+          },
+          fontFamily: {
+            display: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          },
         }
       }
     }
   }
 </script>
 <style>
-  body { background: #0f1117; color: #e6e7ec; }
-  .card { background: #171a23; border: 1px solid #262a36; border-radius: 0.75rem; transition: border-color 0.15s ease; }
-  .card:hover { border-color: #343a4a; }
-  ::-webkit-scrollbar { height: 6px; width: 6px; }
-  ::-webkit-scrollbar-thumb { background: #2a2e3a; border-radius: 4px; }
-  input[type="month"], input[type="text"], input[type="number"], input[type="color"], select {
-    background: #0f1117; border: 1px solid #262a36; border-radius: 0.5rem;
+  :root { color-scheme: dark; }
+  body {
+    background: #0c0e14;
+    background-image: radial-gradient(ellipse 900px 500px at 20% -10%, rgba(245,158,11,0.10), transparent 60%),
+                       radial-gradient(ellipse 700px 400px at 100% 0%, rgba(56,189,248,0.06), transparent 55%);
+    background-attachment: fixed;
+    color: #e7e8ee;
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
   }
-  .chip { display: inline-flex; align-items: center; gap: 0.25rem; background: #0f1117; border: 1px solid #262a36; border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.75rem; }
-  .chip button { color: #8b8fa3; }
+  .font-display { font-family: 'Fraunces', ui-serif, Georgia, serif; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
+    background-color: #151822;
+    border: 1px solid #262a38;
+    border-radius: 1rem;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .card-accent { position: relative; overflow: hidden; }
+  .card-accent::before {
+    content: ''; position: absolute; inset: 0 0 auto 0; height: 2px;
+    background: var(--accent, #f59e0b); opacity: 0.85;
+  }
+  ::-webkit-scrollbar { height: 6px; width: 6px; }
+  ::-webkit-scrollbar-thumb { background: #2a2e3f; border-radius: 4px; }
+  input[type="month"], input[type="date"], input[type="text"], input[type="number"], input[type="color"], select {
+    background: #0c0e14; border: 1px solid #262a38; border-radius: 0.5rem; color: #e7e8ee;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #f59e0b; }
+  .chip { display: inline-flex; align-items: center; gap: 0.3rem; background: #0c0e14; border: 1px solid #262a38; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.72rem; }
+  .chip button { color: #8b8fa3; font-size: 0.9rem; line-height: 1; }
   .chip button:hover { color: #f87171; }
-  .modal-backdrop { background: rgba(0,0,0,0.6); }
-  .icon-btn { color: #8b8fa3; transition: color 0.15s ease; }
-  .icon-btn:hover { color: #e6e7ec; }
+  .tag { font-size: 10px; padding: 1px 6px; border-radius: 5px; font-weight: 500; letter-spacing: 0.02em; }
+  .modal-backdrop { background: rgba(6,7,11,0.72); backdrop-filter: blur(2px); }
+  .icon-btn { color: #8b8fa3; transition: color 0.15s ease, background-color 0.15s ease; }
+  .icon-btn:hover { color: #e7e8ee; }
+  .row-hover:hover { background: rgba(255,255,255,0.02); }
+  .navpill { white-space: nowrap; font-size: 0.78rem; padding: 0.35rem 0.8rem; border-radius: 999px; color: #8b8fa3; border: 1px solid transparent; }
+  .navpill:hover { color: #e7e8ee; border-color: #262a38; }
+  .btn-primary { background: #f59e0b; color: #0c0e14; font-weight: 600; }
+  .btn-primary:hover { background: #fbbf24; }
+  .btn-primary:disabled { opacity: 0.6; }
+  .stat-divider { border-color: #21242f; }
+  section[id] { scroll-margin-top: 5.5rem; }
 </style>
 </head>
 <body class="min-h-screen antialiased">
-<div class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+<div class="max-w-6xl mx-auto px-4 pt-6 pb-24 space-y-6">
 
-  <header class="flex flex-wrap items-center justify-between gap-3">
-    <div>
-      <h1 class="text-xl font-semibold tracking-tight">Personal Cashflow Ledger</h1>
-      <p class="text-sm text-muted">where every rupee went.</p>
+  <header class="space-y-4">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 class="font-display text-2xl sm:text-3xl font-medium tracking-tight text-white">Personal Cashflow Ledger</h1>
+        <p class="text-sm text-muted mt-0.5">where every rupee went.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input id="month-picker" type="month" class="card px-3 py-1.5 text-sm text-white [color-scheme:dark]" />
+        <button id="open-settings" class="card px-3 py-1.5 text-sm icon-btn" title="Settings">⚙ Settings</button>
+        <button id="open-categories" class="card px-3 py-1.5 text-sm icon-btn" title="Manage categories">🏷 Categories</button>
+      </div>
     </div>
-    <div class="flex items-center gap-2">
-      <input id="month-picker" type="month" class="card px-3 py-1.5 text-sm text-white [color-scheme:dark]" />
-      <button id="open-settings" class="card px-3 py-1.5 text-sm icon-btn" title="Settings">⚙ Settings</button>
-      <button id="open-categories" class="card px-3 py-1.5 text-sm icon-btn" title="Manage categories">🏷 Categories</button>
-    </div>
+    <nav class="flex gap-1 overflow-x-auto -mx-1 px-1 border-y border-[#1b1e29] py-1.5">
+      <a href="#sec-summary" class="navpill">Overview</a>
+      <a href="#sec-spending" class="navpill">Spending</a>
+      <a href="#sec-recap" class="navpill">Daily recap</a>
+      <a href="#sec-burn" class="navpill">Daily burn</a>
+      <a href="#sec-trends" class="navpill">Trends</a>
+      <a href="#sec-investments" class="navpill">Investments</a>
+      <a href="#sec-fixed" class="navpill">Fixed costs</a>
+      <a href="#sec-budgets" class="navpill">Budgets</a>
+      <a href="#sec-activity" class="navpill">Activity</a>
+    </nav>
   </header>
 
   <!-- Summary cards -->
-  <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-    <div class="card p-4">
-      <p class="text-xs text-muted uppercase tracking-wide">Salary</p>
-      <p id="card-salary" class="text-2xl font-semibold mt-1">₹0</p>
-      <p id="card-salary-sub" class="text-xs text-muted mt-1">0% of ₹0 used</p>
-      <div class="h-1.5 rounded-full bg-[#262a36] mt-2 overflow-hidden">
+  <section id="sec-summary" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="card card-accent p-4" style="--accent:#f59e0b">
+      <p class="text-[11px] text-muted uppercase tracking-wider">Salary</p>
+      <p id="card-salary" class="text-2xl font-display font-medium mt-1 tnum">₹0</p>
+      <p id="card-salary-sub" class="text-xs text-muted mt-1 tnum">0% of ₹0 used</p>
+      <div class="h-1.5 rounded-full bg-[#21242f] mt-2 overflow-hidden">
         <div id="card-salary-bar" class="h-full bg-amber-500" style="width:0%"></div>
       </div>
     </div>
-    <div class="card p-4">
-      <p class="text-xs text-muted uppercase tracking-wide">Credit</p>
-      <p id="card-credit" class="text-2xl font-semibold mt-1">₹0</p>
-      <p id="card-credit-sub" class="text-xs text-muted mt-1">0% of ₹0 used</p>
-      <div class="h-1.5 rounded-full bg-[#262a36] mt-2 overflow-hidden">
+    <div class="card card-accent p-4" style="--accent:#38bdf8">
+      <p class="text-[11px] text-muted uppercase tracking-wider">Credit</p>
+      <p id="card-credit" class="text-2xl font-display font-medium mt-1 tnum">₹0</p>
+      <p id="card-credit-sub" class="text-xs text-muted mt-1 tnum">0% of ₹0 used</p>
+      <div class="h-1.5 rounded-full bg-[#21242f] mt-2 overflow-hidden">
         <div id="card-credit-bar" class="h-full bg-sky-500" style="width:0%"></div>
       </div>
     </div>
-    <div class="card p-4">
-      <p class="text-xs text-muted uppercase tracking-wide">Top category</p>
-      <p id="card-top" class="text-2xl font-semibold mt-1">—</p>
-      <p id="card-top-sub" class="text-xs text-muted mt-1">0% of spend</p>
+    <div class="card card-accent p-4" style="--accent:#34d399">
+      <p class="text-[11px] text-muted uppercase tracking-wider">Savings</p>
+      <p id="card-savings" class="text-2xl font-display font-medium mt-1 tnum">₹0</p>
+      <p id="card-savings-sub" class="text-xs text-muted mt-1 tnum">+₹0 this month</p>
     </div>
-    <div class="card p-4">
-      <p class="text-xs text-muted uppercase tracking-wide">Projected month-end</p>
-      <p id="card-proj" class="text-2xl font-semibold mt-1">₹0</p>
-      <p id="card-proj-sub" class="text-xs text-muted mt-1">₹0/day pace</p>
+    <div class="card card-accent p-4" style="--accent:#818cf8">
+      <p class="text-[11px] text-muted uppercase tracking-wider">Liquid fund</p>
+      <p id="card-liquid" class="text-2xl font-display font-medium mt-1 tnum">₹0</p>
+      <p id="card-liquid-sub" class="text-xs text-muted mt-1 tnum">+₹0 this month</p>
     </div>
   </section>
 
   <!-- Where the money goes -->
-  <section class="card p-4">
-    <h2 class="font-medium mb-3">Where the money goes</h2>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+  <section id="sec-spending" class="card p-4 sm:p-5">
+    <h2 class="font-display text-lg mb-4">Where the money goes</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-5 items-center">
       <div class="relative h-64">
         <canvas id="donut-chart"></canvas>
         <div id="donut-center" class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
           <span class="text-xs text-muted">Total</span>
-          <span id="donut-total" class="text-lg font-semibold">₹0</span>
+          <span id="donut-total" class="text-lg font-display tnum">₹0</span>
         </div>
       </div>
-      <ul id="legend-list" class="space-y-2 text-sm"></ul>
+      <div>
+        <ul id="legend-list" class="space-y-2 text-sm mb-4"></ul>
+        <div class="grid grid-cols-2 gap-3 pt-3 border-t stat-divider">
+          <div>
+            <p class="text-[11px] text-muted uppercase tracking-wider">Top category</p>
+            <p id="card-top" class="text-base font-medium mt-0.5">—</p>
+            <p id="card-top-sub" class="text-xs text-muted tnum">0% of spend</p>
+          </div>
+          <div>
+            <p class="text-[11px] text-muted uppercase tracking-wider">Projected month-end</p>
+            <p id="card-proj" class="text-base font-medium mt-0.5 tnum">₹0</p>
+            <p id="card-proj-sub" class="text-xs text-muted tnum">₹0/day pace</p>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
   <!-- Spending insights -->
-  <section class="card p-4">
-    <h2 class="font-medium mb-3">Spending insights</h2>
-    <ul id="insights-list" class="space-y-2 text-sm"></ul>
+  <section class="card p-4 sm:p-5">
+    <h2 class="font-display text-lg mb-3">Spending insights</h2>
+    <ul id="insights-list" class="space-y-2.5 text-sm"></ul>
   </section>
 
   <!-- AI daily recap -->
-  <section class="card p-4">
+  <section id="sec-recap" class="card p-4 sm:p-5">
     <div class="flex items-center justify-between mb-1">
-      <h2 class="font-medium">✨ Daily recap</h2>
+      <h2 class="font-display text-lg">✨ Daily recap</h2>
       <button id="refresh-recap" class="text-xs icon-btn card px-2 py-1">↻ Refresh</button>
     </div>
     <p id="recap-source" class="text-xs text-muted mb-2"></p>
-    <ul id="recap-list" class="space-y-2 text-sm"></ul>
+    <ul id="recap-list" class="space-y-2.5 text-sm"></ul>
   </section>
 
   <!-- Daily burn -->
-  <section class="card p-4">
-    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <h2 class="font-medium">Daily burn</h2>
-      <select id="category-filter" class="text-xs px-2 py-1">
+  <section id="sec-burn" class="card p-4 sm:p-5">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <h2 class="font-display text-lg">Daily burn</h2>
+      <select id="category-filter" class="text-xs px-2 py-1.5">
         <option value="">All categories</option>
       </select>
     </div>
@@ -128,69 +192,70 @@
   </section>
 
   <!-- Month over month + Savings -->
-  <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-    <div class="card p-4">
-      <h2 id="monthly-title" class="font-medium mb-3">Month over month</h2>
+  <section id="sec-trends" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="card p-4 sm:p-5">
+      <h2 id="monthly-title" class="font-display text-lg mb-4">Month over month</h2>
       <div class="h-56"><canvas id="monthly-chart"></canvas></div>
     </div>
-    <div class="card p-4">
-      <h2 class="font-medium mb-1">Savings &amp; investments</h2>
-      <p id="savings-total-sub" class="text-xs text-muted mb-2">₹0 saved this month</p>
+    <div class="card p-4 sm:p-5">
+      <h2 class="font-display text-lg mb-1">Savings &amp; investments</h2>
+      <p id="savings-total-sub" class="text-xs text-muted mb-3 tnum">₹0 saved this month</p>
       <div class="h-56"><canvas id="savings-chart"></canvas></div>
     </div>
   </section>
 
   <!-- Long-term investments -->
-  <section class="card p-4">
+  <section id="sec-investments" class="card p-4 sm:p-5">
     <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
-      <h2 class="font-medium">Long-term investments</h2>
-      <div class="flex items-center gap-2">
-        <input id="portfolio-value-input" type="number" placeholder="Update this month's value" class="text-xs px-2 py-1.5 w-44" />
-        <button id="save-portfolio-value" class="text-xs bg-amber-500 hover:bg-amber-400 text-black font-medium rounded px-3 py-1.5">Save</button>
-      </div>
+      <h2 class="font-display text-lg">Long-term investments</h2>
+      <button id="open-add-vehicle" class="text-xs icon-btn card px-2 py-1">+ Add investment</button>
     </div>
-    <p id="investments-stat" class="text-xs text-muted mb-2"></p>
-    <p class="text-xs text-muted mb-3">"Contributed" is computed automatically from your Investments-category spend. "Portfolio value" is whatever you tell it once a month — the gap is your gain or loss.</p>
-    <div class="h-56"><canvas id="investments-chart"></canvas></div>
+    <p id="investments-stat" class="text-sm mb-3 tnum"></p>
+    <div class="h-52 mb-5"><canvas id="investments-chart"></canvas></div>
+
+    <p class="text-[11px] text-muted uppercase tracking-wider mb-2">Vehicles</p>
+    <div id="vehicles-list" class="space-y-3"></div>
+    <p id="vehicles-empty" class="text-sm text-muted hidden">No investment vehicles yet — add one above, or from 🏷 Categories with kind "saving".</p>
   </section>
 
   <!-- Fixed & recurring expenses -->
-  <section class="card p-4">
+  <section id="sec-fixed" class="card p-4 sm:p-5">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="font-medium">Fixed &amp; recurring expenses</h2>
-      <span id="recurring-total" class="text-sm text-muted">≈₹0/month locked in</span>
+      <h2 class="font-display text-lg">Fixed &amp; recurring expenses</h2>
+      <span id="recurring-total" class="text-sm text-muted tnum">≈₹0/month locked in</span>
     </div>
-    <p class="text-xs text-muted mb-3">Costs tagged 'fixed'/'recurring' (monthly) or 'yearly' (annual) — still counted in salary/credit and spend above, but insights treat them as non-cuttable rather than variable spend.</p>
+    <p class="text-xs text-muted mb-4">Costs tagged 'fixed'/'recurring' (monthly) or 'yearly' (annual) — still counted in salary/credit and spend above, but insights treat them as non-cuttable rather than variable spend.</p>
 
-    <p class="text-xs text-muted uppercase tracking-wide mb-1.5">📌 Monthly fixed</p>
-    <div id="recurring-monthly-list" class="space-y-2 text-sm mb-4"></div>
-    <p id="recurring-monthly-empty" class="text-sm text-muted hidden mb-4">None yet. Tag one with "fixed"/"recurring", e.g. "rent 21500 fixed".</p>
+    <p class="text-[11px] text-muted uppercase tracking-wider mb-2">📌 Monthly fixed</p>
+    <div id="recurring-monthly-list" class="space-y-2 text-sm mb-5"></div>
+    <p id="recurring-monthly-empty" class="text-sm text-muted hidden mb-5">None yet. Tag one with "fixed"/"recurring", e.g. "rent 21500 fixed".</p>
 
-    <p class="text-xs text-muted uppercase tracking-wide mb-1.5">🔁 Yearly cross-cutting</p>
+    <p class="text-[11px] text-muted uppercase tracking-wider mb-2">🔁 Yearly cross-cutting</p>
     <div id="recurring-yearly-list" class="space-y-2 text-sm"></div>
     <p id="recurring-yearly-empty" class="text-sm text-muted hidden">None yet. Tag one with "yearly", e.g. "gym membership 12000 yearly".</p>
   </section>
 
   <!-- Budgets & alerts -->
-  <section class="card p-4">
-    <h2 class="font-medium mb-3">Budgets &amp; alerts</h2>
+  <section id="sec-budgets" class="card p-4 sm:p-5">
+    <h2 class="font-display text-lg mb-4">Budgets &amp; alerts</h2>
     <div id="budgets-list" class="space-y-4"></div>
     <p id="budgets-empty" class="text-sm text-muted hidden">No category caps set yet — set one in 🏷 Categories.</p>
   </section>
 
   <!-- Recent activity -->
-  <section class="card p-4">
-    <h2 class="font-medium">Recent activity</h2>
-    <p class="text-xs text-muted mb-3">Latest entries logged from Telegram.</p>
+  <section id="sec-activity" class="card p-4 sm:p-5">
+    <h2 class="font-display text-lg">Recent activity</h2>
+    <p class="text-xs text-muted mb-3">Latest entries logged from Telegram. Tap ✎ to edit.</p>
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
-          <tr class="text-left text-muted border-b border-[#262a36]">
+          <tr class="text-left text-muted border-b border-[#262a38] text-xs uppercase tracking-wide">
             <th class="py-2 pr-4 font-normal">Date</th>
             <th class="py-2 pr-4 font-normal">Category</th>
             <th class="py-2 pr-4 font-normal">Note</th>
             <th class="py-2 pr-4 font-normal">Source</th>
             <th class="py-2 pr-4 font-normal text-right">Amount</th>
+            <th class="py-2 pl-2 font-normal"></th>
           </tr>
         </thead>
         <tbody id="transactions-body"></tbody>
@@ -204,14 +269,14 @@
 <div id="settings-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
   <div class="card p-5 w-full max-w-sm">
     <div class="flex items-center justify-between mb-4">
-      <h3 class="font-medium">Settings</h3>
+      <h3 class="font-display text-lg">Settings</h3>
       <button class="settings-close icon-btn text-lg leading-none">&times;</button>
     </div>
     <label class="block text-xs text-muted mb-1">Monthly salary (₹)</label>
     <input id="input-salary" type="number" class="w-full px-3 py-2 text-sm mb-3" />
     <label class="block text-xs text-muted mb-1">Credit limit (₹)</label>
     <input id="input-credit" type="number" class="w-full px-3 py-2 text-sm mb-4" />
-    <button id="save-settings" class="w-full bg-amber-500 hover:bg-amber-400 text-black text-sm font-medium rounded-lg py-2">Save</button>
+    <button id="save-settings" class="w-full btn-primary text-sm rounded-lg py-2">Save</button>
   </div>
 </div>
 
@@ -219,12 +284,12 @@
 <div id="categories-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
   <div class="card p-5 w-full max-w-2xl max-h-[85vh] overflow-y-auto">
     <div class="flex items-center justify-between mb-4">
-      <h3 class="font-medium">Manage categories</h3>
+      <h3 class="font-display text-lg">Manage categories</h3>
       <button class="categories-close icon-btn text-lg leading-none">&times;</button>
     </div>
     <div id="categories-editor" class="space-y-4"></div>
-    <div class="border-t border-[#262a36] mt-5 pt-4">
-      <p class="text-xs text-muted uppercase tracking-wide mb-2">Add category</p>
+    <div class="border-t border-[#262a38] mt-5 pt-4">
+      <p class="text-[11px] text-muted uppercase tracking-wider mb-2">Add category</p>
       <div class="flex flex-wrap gap-2 items-center">
         <input id="new-cat-name" type="text" placeholder="Name" class="px-2 py-1.5 text-sm w-32" />
         <input id="new-cat-color" type="color" value="#64748b" class="h-8 w-10 p-0.5" />
@@ -232,10 +297,68 @@
           <option value="discretionary">discretionary</option>
           <option value="essential">essential</option>
           <option value="saving">saving</option>
+          <option value="liquid">liquid</option>
         </select>
         <input id="new-cat-cap" type="number" placeholder="Cap (optional)" class="px-2 py-1.5 text-sm w-32" />
-        <button id="add-category" class="bg-amber-500 hover:bg-amber-400 text-black text-sm font-medium rounded-lg px-3 py-1.5">Add</button>
+        <button id="add-category" class="btn-primary text-sm rounded-lg px-3 py-1.5">Add</button>
       </div>
+      <p class="text-xs text-muted mt-2">"saving" = a long-term investment vehicle (tracked in Long-term investments). "liquid" = an emergency/liquid cash fund (tracked at the top as its own card).</p>
+    </div>
+  </div>
+</div>
+
+<!-- Add investment vehicle modal -->
+<div id="add-vehicle-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
+  <div class="card p-5 w-full max-w-sm">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-display text-lg">Add investment vehicle</h3>
+      <button class="add-vehicle-close icon-btn text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mb-3">A vehicle is just a category with kind "saving" — e.g. a SIP, a gold plan, fixed deposits. Each is tracked independently below.</p>
+    <label class="block text-xs text-muted mb-1">Name</label>
+    <input id="vehicle-name" type="text" placeholder="e.g. Gold Plan" class="w-full px-3 py-2 text-sm mb-3" />
+    <label class="block text-xs text-muted mb-1">Color</label>
+    <input id="vehicle-color" type="color" value="#34d399" class="h-9 w-12 p-0.5 mb-4" />
+    <button id="save-vehicle" class="w-full btn-primary text-sm rounded-lg py-2">Add vehicle</button>
+  </div>
+</div>
+
+<!-- Edit transaction modal -->
+<div id="edit-txn-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center p-4 z-50">
+  <div class="card p-5 w-full max-w-sm">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-display text-lg">Edit transaction</h3>
+      <button class="edit-txn-close icon-btn text-lg leading-none">&times;</button>
+    </div>
+    <input type="hidden" id="edit-txn-id" />
+    <label class="block text-xs text-muted mb-1">Category</label>
+    <select id="edit-txn-category" class="w-full px-3 py-2 text-sm mb-3"></select>
+    <label class="block text-xs text-muted mb-1">Note</label>
+    <input id="edit-txn-note" type="text" class="w-full px-3 py-2 text-sm mb-3" />
+    <label class="block text-xs text-muted mb-1">Amount (₹)</label>
+    <input id="edit-txn-amount" type="number" class="w-full px-3 py-2 text-sm mb-3" />
+    <label class="block text-xs text-muted mb-1">Date</label>
+    <input id="edit-txn-date" type="date" class="w-full px-3 py-2 text-sm mb-3" />
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div>
+        <label class="block text-xs text-muted mb-1">Payment source</label>
+        <select id="edit-txn-payment" class="w-full px-3 py-2 text-sm">
+          <option value="salary">💰 Salary</option>
+          <option value="credit">💳 Credit</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-muted mb-1">Recurrence</label>
+        <select id="edit-txn-recurrence" class="w-full px-3 py-2 text-sm">
+          <option value="one-off">One-off</option>
+          <option value="monthly">📌 Fixed monthly</option>
+          <option value="yearly">🔁 Yearly</option>
+        </select>
+      </div>
+    </div>
+    <div class="flex gap-2">
+      <button id="delete-txn" class="text-sm text-red-400 hover:text-red-300 px-3 py-2">Delete</button>
+      <button id="save-txn" class="flex-1 btn-primary text-sm rounded-lg py-2">Save changes</button>
     </div>
   </div>
 </div>
@@ -268,12 +391,12 @@ function noChartFallback(canvasId) {
 }
 
 if (chartsAvailable()) {
-  Chart.defaults.font.family = "ui-sans-serif, system-ui, sans-serif";
+  Chart.defaults.font.family = "Inter, ui-sans-serif, system-ui, sans-serif";
   Chart.defaults.color = '#8b8fa3';
-  Chart.defaults.plugins.tooltip.backgroundColor = '#1c202b';
-  Chart.defaults.plugins.tooltip.titleColor = '#e6e7ec';
+  Chart.defaults.plugins.tooltip.backgroundColor = '#181b26';
+  Chart.defaults.plugins.tooltip.titleColor = '#e7e8ee';
   Chart.defaults.plugins.tooltip.bodyColor = '#c7cad4';
-  Chart.defaults.plugins.tooltip.borderColor = '#343a4a';
+  Chart.defaults.plugins.tooltip.borderColor = '#2e3242';
   Chart.defaults.plugins.tooltip.borderWidth = 1;
   Chart.defaults.plugins.tooltip.padding = 10;
   Chart.defaults.plugins.tooltip.cornerRadius = 8;
@@ -282,6 +405,8 @@ if (chartsAvailable()) {
 
 let donutChart, burnChart, monthlyChart, savingsChart, investmentsChart;
 let selectedCategory = '';
+let categoryColorMap = {};
+let categoriesCache = [];
 
 async function fetchJSON(path, params) {
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -299,10 +424,10 @@ function statusColor(status) {
 
 function recurrenceBadge(recurrence) {
   if (recurrence === 'yearly') {
-    return ' <span class="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300">yearly</span>';
+    return ' <span class="tag bg-purple-500/20 text-purple-300">yearly</span>';
   }
   if (recurrence === 'monthly') {
-    return ' <span class="text-[10px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-300">fixed</span>';
+    return ' <span class="tag bg-blue-500/20 text-blue-300">fixed</span>';
   }
   return '';
 }
@@ -322,6 +447,12 @@ async function loadSummary(month) {
   document.getElementById('card-credit-bar').style.width = Math.min(s.credit_pct_used, 100) + '%';
   document.getElementById('card-credit-bar').className = 'h-full ' + (s.credit_pct_used > 100 ? 'bg-red-500' : 'bg-sky-500');
 
+  document.getElementById('card-savings').textContent = fmtINR(s.savings_balance);
+  document.getElementById('card-savings-sub').textContent = `+${fmtINR(s.savings_total)} this month`;
+
+  document.getElementById('card-liquid').textContent = fmtINR(s.liquid_balance);
+  document.getElementById('card-liquid-sub').textContent = `+${fmtINR(s.liquid_total)} this month`;
+
   document.getElementById('card-top').textContent = s.top_category || '—';
   document.getElementById('card-top-sub').textContent = `${fmtINR(s.top_amount)} · ${s.top_pct.toFixed(0)}% of spend`;
 
@@ -338,7 +469,7 @@ async function loadSummary(month) {
     if (donutChart) donutChart.destroy();
     donutChart = new Chart(document.getElementById('donut-chart'), {
       type: 'doughnut',
-      data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: '#171a23', borderWidth: 2, hoverOffset: 10, hoverBorderColor: '#171a23' }] },
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: '#151822', borderWidth: 2, hoverOffset: 10, hoverBorderColor: '#151822' }] },
       options: {
         cutout: '70%',
         maintainAspectRatio: false,
@@ -360,7 +491,7 @@ async function loadSummary(month) {
         <span class="w-2.5 h-2.5 rounded-full inline-block" style="background:${b.color}"></span>
         ${b.category}
       </span>
-      <span class="text-muted">${fmtINR(b.amount)} · ${b.pct.toFixed(0)}%</span>
+      <span class="text-muted tnum">${fmtINR(b.amount)} · ${b.pct.toFixed(0)}%</span>
     </li>
   `).join('') || '<li class="text-muted">No spend logged yet.</li>';
 
@@ -412,10 +543,6 @@ async function loadDailyBurn(month, category) {
   gradient.addColorStop(0, 'rgba(245,158,11,0.28)');
   gradient.addColorStop(1, 'rgba(245,158,11,0.02)');
 
-  // Scale the y-axis off the pace *so far*, not the full month's target —
-  // otherwise the dashed reference line (which ends at the full monthly
-  // salary+credit total) dwarfs the real spend line early in the month and
-  // it looks like nothing is plotted.
   const today = new Date();
   const isCurrentMonth = month === (today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0'));
   const daysElapsed = isCurrentMonth ? today.getDate() : labels.length;
@@ -434,7 +561,7 @@ async function loadDailyBurn(month, category) {
       pointRadius: 0,
       pointHoverRadius: 5,
       pointHoverBackgroundColor: '#f59e0b',
-      pointHoverBorderColor: '#171a23',
+      pointHoverBorderColor: '#151822',
       pointHoverBorderWidth: 2,
       borderWidth: 2.5,
     },
@@ -468,8 +595,8 @@ async function loadDailyBurn(month, category) {
         },
       },
       scales: {
-        x: { grid: { color: '#1e2129', display: false }, ticks: { color: '#8b8fa3' } },
-        y: { grid: { color: '#1e2129' }, max: yMax, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+        x: { grid: { color: '#1b1e29', display: false }, ticks: { color: '#8b8fa3' } },
+        y: { grid: { color: '#1b1e29' }, max: yMax, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
       },
     },
   });
@@ -480,8 +607,8 @@ async function loadMonthly(month, category) {
   const labels = d.months.map(m => m.month);
   const totals = d.months.map(m => m.total);
   const current = month;
-  const colors = d.months.map(m => (m.month === current ? '#f59e0b' : '#3b3f4d'));
-  const hoverColors = d.months.map(m => (m.month === current ? '#fbbf24' : '#4b5163'));
+  const colors = d.months.map(m => (m.month === current ? '#f59e0b' : '#33384a'));
+  const hoverColors = d.months.map(m => (m.month === current ? '#fbbf24' : '#454b60'));
 
   document.getElementById('monthly-title').textContent = category ? `Month over month — ${category}` : 'Month over month';
 
@@ -498,7 +625,7 @@ async function loadMonthly(month, category) {
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
-        y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+        y: { grid: { color: '#1b1e29' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
       },
     },
   });
@@ -509,8 +636,8 @@ async function loadSavings(month) {
   const labels = d.months.map(m => m.month);
   const totals = d.months.map(m => m.total);
   const current = month;
-  const colors = d.months.map(m => (m.month === current ? '#eab308' : '#3f3a24'));
-  const hoverColors = d.months.map(m => (m.month === current ? '#facc15' : '#59502f'));
+  const colors = d.months.map(m => (m.month === current ? '#34d399' : '#233530'));
+  const hoverColors = d.months.map(m => (m.month === current ? '#6ee7b7' : '#31473f'));
 
   document.getElementById('savings-total-sub').textContent =
     `${fmtINR(totals[totals.length - 1] || 0)} saved this month`;
@@ -528,71 +655,133 @@ async function loadSavings(month) {
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
-        y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+        y: { grid: { color: '#1b1e29' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
       },
     },
   });
 }
 
+function daysAgoLabel(days) {
+  if (days === null || days === undefined) return 'never updated';
+  if (days === 0) return 'updated today';
+  if (days === 1) return 'updated yesterday';
+  return `updated ${days}d ago`;
+}
+
 async function loadInvestments(month) {
   const d = await fetchJSON('/api/investments', { month, n: 12 });
-  const labels = d.months.map(m => m.month);
-  const contributed = d.months.map(m => m.contributed);
-  const value = d.months.map(m => m.value);
+  const labels = d.combined_months.map(m => m.month);
+  const contributed = d.combined_months.map(m => m.contributed);
+  const value = d.combined_months.map(m => m.value);
 
   const statEl = document.getElementById('investments-stat');
-  if (d.latest_value !== null && d.latest_value !== undefined) {
-    const sign = d.gain >= 0 ? '+' : '−';
-    const gainColor = d.gain >= 0 ? 'text-emerald-400' : 'text-red-400';
-    statEl.innerHTML = `Value ${fmtINR(d.latest_value)} vs ${fmtINR(d.latest_contributed)} contributed — ` +
-      `<span class="${gainColor}">${sign}${fmtINR(Math.abs(d.gain))} (${d.gain_pct.toFixed(1)}%)</span>`;
+  if (d.total_value !== null && d.total_value !== undefined) {
+    const sign = d.total_gain >= 0 ? '+' : '−';
+    const gainColor = d.total_gain >= 0 ? 'text-emerald-400' : 'text-red-400';
+    statEl.innerHTML = `Value ${fmtINR(d.total_value)} vs ${fmtINR(d.total_contributed)} contributed — ` +
+      `<span class="${gainColor}">${sign}${fmtINR(Math.abs(d.total_gain))} (${d.total_gain_pct.toFixed(1)}%)</span>`;
   } else {
-    statEl.textContent = `${fmtINR(d.latest_contributed)} contributed so far — log a portfolio value to track gains/losses.`;
+    statEl.innerHTML = `<span class="text-muted">${fmtINR(d.total_contributed)} contributed so far — update a vehicle's value below to track gains/losses.</span>`;
   }
 
-  if (!chartsAvailable()) { noChartFallback('investments-chart'); return; }
-  if (investmentsChart) investmentsChart.destroy();
-  investmentsChart = new Chart(document.getElementById('investments-chart'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Contributed',
-          data: contributed,
-          borderColor: '#eab308',
-          backgroundColor: 'rgba(234,179,8,0.08)',
-          fill: true,
-          tension: 0.25,
-          pointRadius: 0,
-          borderWidth: 2,
-        },
-        {
-          label: 'Portfolio value',
-          data: value,
-          borderColor: '#22c55e',
-          backgroundColor: 'transparent',
-          spanGaps: true,
-          tension: 0.25,
-          pointRadius: 3,
-          pointBackgroundColor: '#22c55e',
-          pointHoverRadius: 5,
-          borderWidth: 2,
-        },
-      ],
-    },
-    options: {
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { labels: { color: '#8b8fa3', usePointStyle: true, boxWidth: 8 } },
-        tooltip: { callbacks: { label: (ctx) => ctx.raw == null ? null : `${ctx.dataset.label}: ${fmtINR(ctx.raw)}` } },
+  if (chartsAvailable()) {
+    if (investmentsChart) investmentsChart.destroy();
+    investmentsChart = new Chart(document.getElementById('investments-chart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Contributed',
+            data: contributed,
+            borderColor: '#eab308',
+            backgroundColor: 'rgba(234,179,8,0.08)',
+            fill: true,
+            tension: 0.25,
+            pointRadius: 0,
+            borderWidth: 2,
+          },
+          {
+            label: 'Value',
+            data: value,
+            borderColor: '#34d399',
+            backgroundColor: 'transparent',
+            spanGaps: true,
+            tension: 0.25,
+            pointRadius: 3,
+            pointBackgroundColor: '#34d399',
+            pointHoverRadius: 5,
+            borderWidth: 2,
+          },
+        ],
       },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
-        y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+      options: {
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#8b8fa3', usePointStyle: true, boxWidth: 8 } },
+          tooltip: { callbacks: { label: (ctx) => ctx.raw == null ? null : `${ctx.dataset.label}: ${fmtINR(ctx.raw)}` } },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
+          y: { grid: { color: '#1b1e29' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+        },
       },
-    },
+    });
+  } else {
+    noChartFallback('investments-chart');
+  }
+
+  const list = document.getElementById('vehicles-list');
+  const empty = document.getElementById('vehicles-empty');
+  if (!d.vehicles.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  list.innerHTML = d.vehicles.map(v => {
+    const hasValue = v.latest_value !== null && v.latest_value !== undefined;
+    const gainColor = hasValue && v.gain >= 0 ? 'text-emerald-400' : 'text-red-400';
+    const staleClass = v.updated_days_ago !== null && v.updated_days_ago > 45 ? 'text-amber-400' : 'text-muted';
+    return `
+    <div class="border border-[#262a38] rounded-xl p-3" data-vehicle="${v.category}">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <span class="flex items-center gap-2 font-medium">
+          <span class="w-2.5 h-2.5 rounded-full inline-block" style="background:${v.color}"></span>
+          ${v.category}
+        </span>
+        <span class="text-xs ${staleClass}">${daysAgoLabel(v.updated_days_ago)}</span>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-2 text-sm mb-2">
+        <span class="text-muted tnum">Contributed ${fmtINR(v.contributed)}</span>
+        ${hasValue
+          ? `<span class="tnum">Value ${fmtINR(v.latest_value)} <span class="${gainColor}">(${v.gain >= 0 ? '+' : '−'}${fmtINR(Math.abs(v.gain))}, ${v.gain_pct.toFixed(1)}%)</span></span>`
+          : `<span class="text-muted">No value logged yet</span>`}
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="number" placeholder="Update value" class="vehicle-value-input text-xs px-2 py-1.5 flex-1" />
+        <button class="vehicle-save-value text-xs btn-primary rounded px-3 py-1.5">Save</button>
+      </div>
+    </div>
+  `; }).join('');
+
+  list.querySelectorAll('[data-vehicle]').forEach(row => {
+    const vehicle = row.dataset.vehicle;
+    row.querySelector('.vehicle-save-value').addEventListener('click', async () => {
+      const input = row.querySelector('.vehicle-value-input');
+      const val = parseFloat(input.value);
+      if (isNaN(val)) return;
+      const m = monthPicker.value || currentMonthStr();
+      await fetch('/api/investments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: vehicle, month: m, value: val }),
+      });
+      input.value = '';
+      loadInvestments(m);
+    });
   });
 }
 
@@ -606,12 +795,12 @@ function renderRecurringGroup(items, listId, emptyId, suffix) {
   }
   empty.classList.add('hidden');
   list.innerHTML = items.map(t => `
-    <div class="flex items-center justify-between border-b border-[#1e2129] pb-2">
+    <div class="flex items-center justify-between border-b border-[#1b1e29] pb-2">
       <span>
         <span class="text-muted">${t.spent_on}</span>
         · ${t.category} ${t.note ? '· ' + t.note : ''}
       </span>
-      <span>${fmtINR(t.amount)}${suffix}</span>
+      <span class="tnum">${fmtINR(t.amount)}${suffix}</span>
     </div>
   `).join('');
 }
@@ -647,11 +836,11 @@ async function loadBudgets(month) {
         <span class="flex items-center gap-2">
           <span class="w-2.5 h-2.5 rounded-full inline-block" style="background:${b.color}"></span>
           ${b.category}
-          <span class="text-[10px] px-1.5 py-0.5 rounded ${tagClass[b.status]}">${b.status}</span>
+          <span class="tag ${tagClass[b.status]}">${b.status}</span>
         </span>
-        <span class="text-muted">${fmtINR(b.spent)} / ${fmtINR(b.cap)}</span>
+        <span class="text-muted tnum">${fmtINR(b.spent)} / ${fmtINR(b.cap)}</span>
       </div>
-      <div class="h-1.5 rounded-full bg-[#262a36] overflow-hidden">
+      <div class="h-1.5 rounded-full bg-[#21242f] overflow-hidden">
         <div class="h-full ${b.pct >= 100 ? 'bg-red-500' : 'bg-amber-500'}" style="width:${Math.min(b.pct, 100)}%"></div>
       </div>
     </div>
@@ -663,8 +852,8 @@ async function loadTransactions(month) {
   const body = document.getElementById('transactions-body');
 
   body.innerHTML = d.transactions.map(t => `
-    <tr class="border-b border-[#1e2129]">
-      <td class="py-2 pr-4 text-muted">${t.spent_on}${recurrenceBadge(t.recurrence)}</td>
+    <tr class="border-b border-[#1b1e29] row-hover">
+      <td class="py-2 pr-4 text-muted whitespace-nowrap">${t.spent_on}${recurrenceBadge(t.recurrence)}</td>
       <td class="py-2 pr-4">
         <span class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full inline-block" style="background:${categoryColorMap[t.category] || '#64748b'}"></span>
@@ -672,16 +861,22 @@ async function loadTransactions(month) {
         </span>
       </td>
       <td class="py-2 pr-4 text-muted">${t.note || ''}</td>
-      <td class="py-2 pr-4 text-muted">${t.payment_source === 'credit' ? '💳 Credit' : '💰 Salary'}</td>
-      <td class="py-2 pr-4 text-right">${fmtINR(t.amount)}</td>
+      <td class="py-2 pr-4 text-muted whitespace-nowrap">${t.payment_source === 'credit' ? '💳 Credit' : '💰 Salary'}</td>
+      <td class="py-2 pr-4 text-right tnum">${fmtINR(t.amount)}</td>
+      <td class="py-2 pl-2 text-right">
+        <button class="edit-txn icon-btn" data-id="${t.id}" title="Edit">✎</button>
+      </td>
     </tr>
-  `).join('') || `<tr><td colspan="5" class="py-4 text-center text-muted">No transactions yet.</td></tr>`;
-}
+  `).join('') || `<tr><td colspan="6" class="py-4 text-center text-muted">No transactions yet.</td></tr>`;
 
-let categoryColorMap = {};
+  body.querySelectorAll('.edit-txn').forEach(btn => {
+    btn.addEventListener('click', () => openEditTxnModal(parseInt(btn.dataset.id, 10), d.transactions));
+  });
+}
 
 async function loadCategoryMeta() {
   const d = await fetchJSON('/api/categories');
+  categoriesCache = d.categories;
   categoryColorMap = {};
   d.categories.forEach(c => categoryColorMap[c.name] = c.color);
 
@@ -732,20 +927,6 @@ document.getElementById('category-filter').addEventListener('change', (e) => {
   loadMonthly(month, selectedCategory);
 });
 
-document.getElementById('save-portfolio-value').addEventListener('click', async () => {
-  const input = document.getElementById('portfolio-value-input');
-  const val = parseFloat(input.value);
-  if (isNaN(val)) return;
-  const month = monthPicker.value || currentMonthStr();
-  await fetch('/api/investments', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ month, value: val }),
-  });
-  input.value = '';
-  loadInvestments(month);
-});
-
 // ---- Settings modal ----------------------------------------------------
 
 const settingsModal = document.getElementById('settings-modal');
@@ -774,15 +955,122 @@ document.getElementById('save-settings').addEventListener('click', async () => {
   loadAll();
 });
 
+// ---- Add investment vehicle modal ---------------------------------------
+
+const addVehicleModal = document.getElementById('add-vehicle-modal');
+document.getElementById('open-add-vehicle').addEventListener('click', () => {
+  document.getElementById('vehicle-name').value = '';
+  addVehicleModal.classList.remove('hidden');
+  addVehicleModal.classList.add('flex');
+});
+document.querySelectorAll('.add-vehicle-close').forEach(el => el.addEventListener('click', () => {
+  addVehicleModal.classList.add('hidden');
+  addVehicleModal.classList.remove('flex');
+}));
+document.getElementById('save-vehicle').addEventListener('click', async () => {
+  const name = document.getElementById('vehicle-name').value.trim();
+  if (!name) return;
+  const color = document.getElementById('vehicle-color').value;
+  const res = await fetch('/api/categories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, color, kind: 'saving' }),
+  });
+  if (res.ok) {
+    addVehicleModal.classList.add('hidden');
+    addVehicleModal.classList.remove('flex');
+    loadAll();
+  } else {
+    const err = await res.json();
+    alert(err.detail || 'Could not add investment vehicle');
+  }
+});
+
+// ---- Edit transaction modal ----------------------------------------------
+
+const editTxnModal = document.getElementById('edit-txn-modal');
+
+function openEditTxnModal(id, transactions) {
+  const t = transactions.find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('edit-txn-id').value = t.id;
+  const catSelect = document.getElementById('edit-txn-category');
+  catSelect.innerHTML = categoriesCache.map(c => `<option value="${c.name}" ${c.name === t.category ? 'selected' : ''}>${c.name}</option>`).join('');
+  document.getElementById('edit-txn-note').value = t.note || '';
+  document.getElementById('edit-txn-amount').value = t.amount;
+  document.getElementById('edit-txn-date').value = t.spent_on;
+  document.getElementById('edit-txn-payment').value = t.payment_source;
+  document.getElementById('edit-txn-recurrence').value = t.recurrence;
+  editTxnModal.classList.remove('hidden');
+  editTxnModal.classList.add('flex');
+}
+
+document.querySelectorAll('.edit-txn-close').forEach(el => el.addEventListener('click', () => {
+  editTxnModal.classList.add('hidden');
+  editTxnModal.classList.remove('flex');
+}));
+
+document.getElementById('save-txn').addEventListener('click', async () => {
+  const id = document.getElementById('edit-txn-id').value;
+  await fetch(`/api/transactions/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      category: document.getElementById('edit-txn-category').value,
+      note: document.getElementById('edit-txn-note').value,
+      amount: parseFloat(document.getElementById('edit-txn-amount').value),
+      spent_on: document.getElementById('edit-txn-date').value,
+      payment_source: document.getElementById('edit-txn-payment').value,
+      recurrence: document.getElementById('edit-txn-recurrence').value,
+    }),
+  });
+  editTxnModal.classList.add('hidden');
+  editTxnModal.classList.remove('flex');
+  loadAll();
+});
+
+document.getElementById('delete-txn').addEventListener('click', async () => {
+  const id = document.getElementById('edit-txn-id').value;
+  if (!confirm('Delete this transaction? This cannot be undone.')) return;
+  await fetch(`/api/transactions/${id}`, { method: 'DELETE' });
+  editTxnModal.classList.add('hidden');
+  editTxnModal.classList.remove('flex');
+  loadAll();
+});
+
 // ---- Categories modal ---------------------------------------------------
 
 const categoriesModal = document.getElementById('categories-modal');
+
+async function addKeyword(name, inputEl) {
+  const kw = inputEl.value.trim();
+  if (!kw) return;
+  await fetch(`/api/categories/${encodeURIComponent(name)}/keywords`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword: kw }),
+  });
+  inputEl.value = '';
+  const chip = document.createElement('span');
+  chip.className = 'chip';
+  const chipBtn = document.createElement('button');
+  chipBtn.textContent = '×';
+  chipBtn.dataset.kw = kw;
+  chip.textContent = kw;
+  chip.appendChild(chipBtn);
+  chipBtn.addEventListener('click', async () => {
+    await fetch(`/api/categories/${encodeURIComponent(name)}/keywords/${encodeURIComponent(kw)}`, { method: 'DELETE' });
+    chip.remove();
+  });
+  inputEl.parentElement.insertBefore(chip, inputEl);
+  inputEl.focus();
+}
 
 async function renderCategoriesEditor() {
   const d = await fetchJSON('/api/categories');
   const editor = document.getElementById('categories-editor');
   editor.innerHTML = d.categories.map(c => `
-    <div class="border border-[#262a36] rounded-lg p-3" data-cat="${c.name}">
+    <div class="border border-[#262a38] rounded-xl p-3" data-cat="${c.name}">
       <div class="flex flex-wrap items-center gap-2 mb-2">
         <input type="color" value="${c.color}" class="cat-color h-7 w-9 p-0.5" />
         <span class="font-medium flex-1">${c.name}</span>
@@ -790,14 +1078,16 @@ async function renderCategoriesEditor() {
           <option value="discretionary" ${c.kind === 'discretionary' ? 'selected' : ''}>discretionary</option>
           <option value="essential" ${c.kind === 'essential' ? 'selected' : ''}>essential</option>
           <option value="saving" ${c.kind === 'saving' ? 'selected' : ''}>saving</option>
+          <option value="liquid" ${c.kind === 'liquid' ? 'selected' : ''}>liquid</option>
         </select>
         <input type="number" placeholder="Cap" class="cat-cap text-xs px-2 py-1 w-24" value="${c.monthly_cap ?? ''}" />
-        <button class="cat-save text-xs bg-amber-500 hover:bg-amber-400 text-black rounded px-2 py-1">Save</button>
+        <button class="cat-save text-xs btn-primary rounded px-2 py-1">Save</button>
         ${c.name !== 'Other' ? '<button class="cat-delete text-xs text-red-400 hover:text-red-300 px-2 py-1">Delete</button>' : ''}
       </div>
       <div class="flex flex-wrap gap-1.5 items-center cat-keywords">
         ${c.keywords.map(k => `<span class="chip">${k}<button data-kw="${k}" class="kw-delete">&times;</button></span>`).join('')}
         <input type="text" placeholder="+ keyword" class="kw-add text-xs px-2 py-1 w-24" />
+        <button class="kw-add-btn text-xs icon-btn card px-2 py-1">+ Add</button>
       </div>
     </div>
   `).join('');
@@ -835,15 +1125,14 @@ async function renderCategoriesEditor() {
     });
 
     const kwInput = row.querySelector('.kw-add');
-    kwInput.addEventListener('keydown', async (e) => {
-      if (e.key !== 'Enter' || !kwInput.value.trim()) return;
-      await fetch(`/api/categories/${encodeURIComponent(name)}/keywords`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyword: kwInput.value.trim() }),
-      });
-      renderCategoriesEditor();
+    // Enter key on desktop; a persistent visible button too, since Android
+    // software keyboards don't always fire a reliable keydown/Enter event.
+    kwInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      addKeyword(name, kwInput);
     });
+    row.querySelector('.kw-add-btn').addEventListener('click', () => addKeyword(name, kwInput));
   });
 }
 
