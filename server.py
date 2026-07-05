@@ -159,9 +159,22 @@ def api_savings(month: str = Query(default=None)):
 
 @app.get("/api/recurring")
 def api_recurring():
-    txns = db.get_recurring_transactions()
-    total = sum(t["amount"] for t in txns)
-    return {"transactions": txns, "total": total}
+    """Fixed & recurring costs — split by cadence since a monthly-fixed cost
+    (rent, a subscription) is re-logged every month (we show only the latest
+    instance of each), while yearly cross-cutting ones are rare enough to
+    list in full. monthly_equivalent_total lets the dashboard show one
+    combined "≈₹X/month locked in" figure."""
+    monthly = db.get_fixed_monthly_costs()
+    yearly = db.get_yearly_costs()
+    monthly_total = sum(t["amount"] for t in monthly)
+    yearly_total = sum(t["amount"] for t in yearly)
+    return {
+        "monthly": monthly,
+        "yearly": yearly,
+        "monthly_total": monthly_total,
+        "yearly_total": yearly_total,
+        "monthly_equivalent_total": monthly_total + yearly_total / 12,
+    }
 
 
 @app.get("/api/investments")

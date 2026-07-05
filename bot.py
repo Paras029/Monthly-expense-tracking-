@@ -43,7 +43,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         raw_message=message,
         guessed=result["guessed"],
         payment_source=result["payment_source"],
-        period=result["period"],
+        recurrence=result["recurrence"],
     )
 
     source_icon = "💳" if result["payment_source"] == "credit" else "💰"
@@ -51,8 +51,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result["note"]:
         reply += f" · {result['note']}"
     reply += f" · {source_icon} {result['payment_source'].title()}"
-    if result["period"] == "yearly":
+    if result["recurrence"] == "yearly":
         reply += " · 🔁 Yearly"
+    elif result["recurrence"] == "monthly":
+        reply += " · 📌 Fixed"
     reply += f"  (id {txn_id})"
     if result["guessed"]:
         reply += "\n⚠️ guessed category — reply /cat Food to fix"
@@ -70,10 +72,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  Zomato lunch 300\n"
         "  oyo 1500 travel\n"
         "  SIP index fund 5000\n"
-        "  electricity bill 2200 credit   → paid by credit card\n"
-        "  gym membership 12000 yearly    → recurring annual expense\n\n"
+        "  electricity bill 2200 credit    → paid by credit card\n"
+        "  rent 21500 fixed                → fixed monthly cost (won't skew 'top category')\n"
+        "  gym membership 12000 yearly     → annual cross-cutting cost\n\n"
         "Payment defaults to salary unless you add 'credit'/'card'.\n"
-        "Add 'yearly'/'annual'/'recurring' to tag a cross-cutting expense.\n\n"
+        "Add 'fixed'/'recurring'/'subscription' for a cost that repeats every month at\n"
+        "roughly the same amount (rent, a SIP, a subscription) — insights won't suggest\n"
+        "'cutting' it the way they would a variable purchase.\n"
+        "Add 'yearly'/'annual'/'annually' for an annual cross-cutting cost instead.\n\n"
         "Commands:\n"
         "/undo — delete the last transaction\n"
         "/cat <Category> — recategorise the last transaction\n"

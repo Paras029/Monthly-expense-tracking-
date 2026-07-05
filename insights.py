@@ -46,8 +46,8 @@ def compute_metrics(month):
 
     # "spend" excludes kind='saving' categories (e.g. Investments) — money that
     # left the account still counts fully against salary/credit above, but the
-    # "where the money goes" pie, top-category card, and "largest hit" insight
-    # are about discretionary/essential spending habits, not SIP contributions.
+    # "where the money goes" pie and top-category card are about
+    # discretionary/essential spending habits, not SIP contributions.
     by_category_spend = {
         cat: amount for cat, amount in by_category.items()
         if categories.get(cat, {}).get("kind") != "saving"
@@ -61,7 +61,26 @@ def compute_metrics(month):
         top_category, top_amount = max(by_category_spend.items(), key=lambda kv: kv[1])
     top_pct = (top_amount / spend_total * 100) if spend_total else 0.0
 
-    largest = max(spend_txns, key=lambda t: t["amount"]) if spend_txns else None
+    # "variable" additionally excludes recurrence != 'one-off' (rent, a SIP,
+    # a subscription) — fixed costs you don't really choose month-to-month,
+    # so "cutting your top category 20%" and "largest single hit" should be
+    # computed from what's actually adjustable, not a locked-in fixed cost.
+    variable_txns = [t for t in spend_txns if t["recurrence"] == "one-off"]
+    fixed_txns = [t for t in spend_txns if t["recurrence"] != "one-off"]
+    fixed_total = sum(t["amount"] for t in fixed_txns)
+    variable_total = spend_total - fixed_total
+
+    variable_by_category = {}
+    for t in variable_txns:
+        variable_by_category[t["category"]] = variable_by_category.get(t["category"], 0.0) + t["amount"]
+
+    top_variable_category = None
+    top_variable_amount = 0.0
+    if variable_by_category:
+        top_variable_category, top_variable_amount = max(variable_by_category.items(), key=lambda kv: kv[1])
+    top_variable_pct = (top_variable_amount / variable_total * 100) if variable_total else 0.0
+
+    largest = max(variable_txns, key=lambda t: t["amount"]) if variable_txns else None
 
     discretionary_total = sum(
         amount for cat, amount in by_category.items()
@@ -94,6 +113,11 @@ def compute_metrics(month):
         "top_category": top_category,
         "top_amount": top_amount,
         "top_pct": top_pct,
+        "fixed_total": fixed_total,
+        "variable_total": variable_total,
+        "top_variable_category": top_variable_category,
+        "top_variable_amount": top_variable_amount,
+        "top_variable_pct": top_variable_pct,
         "largest": largest,
         "discretionary_total": discretionary_total,
         "discretionary_pct": discretionary_pct,
@@ -123,11 +147,22 @@ def build_insights(month):
             "status": "watch",
         })
 
-    if m["top_category"]:
-        saved_month = m["top_amount"] * 0.2
+    if m["fixed_total"]:
+        fixed_pct = (m["fixed_total"] / m["spend_total"] * 100) if m["spend_total"] else 0
         bullets.append({
             "text": (
-                f"{m['top_category']} is your top category at {m['top_pct']:.0f}% of spend. "
+                f"Fixed costs (rent, subscriptions, etc.) are ₹{m['fixed_total']:,.0f}/month — "
+                f"{fixed_pct:.0f}% of spend. ₹{m['variable_total']:,.0f} is actually flexible."
+            ),
+            "status": "note",
+        })
+
+    if m["top_variable_category"]:
+        saved_month = m["top_variable_amount"] * 0.2
+        bullets.append({
+            "text": (
+                f"{m['top_variable_category']} is your top variable-spend category at "
+                f"{m['top_variable_pct']:.0f}% of what's flexible. "
                 f"Cutting it 20% saves ₹{saved_month:,.0f}/month (₹{saved_month * 12:,.0f}/year)."
             ),
             "status": "note",
@@ -137,7 +172,7 @@ def build_insights(month):
         t = m["largest"]
         note = t["note"] or "no note"
         bullets.append({
-            "text": f"Largest single hit: ₹{t['amount']:,.0f} on {t['category']} ({note}).",
+            "text": f"Largest single (variable) hit: ₹{t['amount']:,.0f} on {t['category']} ({note}).",
             "status": "note",
         })
 

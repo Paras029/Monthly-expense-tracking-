@@ -74,5 +74,10 @@ PAYMENT_SOURCE_KEYWORDS = {
     "cash": "salary",
 }
 
-# trailing keyword in a message -> period. Default (no match) is 'monthly'.
-RECURRING_KEYWORDS = ["yearly", "annual", "annually", "recurring"]
+# trailing keyword in a message -> recurrence. Default (no match) is 'one-off'.
+# 'yearly' = an annual cross-cutting cost (e.g. gym membership paid once a year).
+# 'monthly' = a fixed cost that recurs every month at roughly the same amount
+# (rent, a SIP contribution, a subscription) — distinct from a one-off variable
+# purchase, even though both get logged as separate monthly transactions.
+YEARLY_KEYWORDS = ["yearly", "annual", "annually"]
+MONTHLY_FIXED_KEYWORDS = ["recurring", "fixed", "subscription"]

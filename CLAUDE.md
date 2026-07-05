@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   source         TEXT DEFAULT 'telegram',
   guessed        INTEGER DEFAULT 0,      -- 1 if category came from the Gemini fallback
   payment_source TEXT DEFAULT 'salary',  -- 'salary' | 'credit'
-  period         TEXT DEFAULT 'monthly'  -- 'monthly' | 'yearly' (cross-cutting/recurring)
+  recurrence     TEXT DEFAULT 'one-off'  -- 'one-off' | 'monthly' | 'yearly' (fixed/cross-cutting)
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -162,6 +162,25 @@ table on first run, then live entirely in the DB from that point on — editable
 dashboard's 🏷 Categories panel (add/remove keywords, add/edit/delete categories) without
 touching code. `config.py` is only the seed data for a fresh database.
 
+`db.init_db()` seeding uses `INSERT OR IGNORE`, which never touches a category that
+already exists — so if a category's seed `kind` changes after some databases are
+already running (as happened when Investments moved essential → saving), those existing
+installs are stuck on the old value forever unless explicitly fixed. `_migrate_investments_kind()`
+does that one-time fix, guarded by a `migrated_investments_kind` settings flag so it
+never fights a user's own later edit back to something else via the Categories panel.
+Any future re-seed of a default category's `kind` needs the same treatment.
+
+**`recurrence`** ('one-off' default | 'monthly' | 'yearly') flags a transaction as a
+fixed, locked-in cost rather than a variable purchase — orthogonal to `kind`. 'yearly'
+is an annual cross-cutting cost (an annual gym membership); 'monthly' is a cost that
+recurs every month at roughly the same amount (rent, a SIP contribution, a Netflix
+subscription) re-logged each time it's paid. Both still count fully against
+salary/credit and `spend_total` like any transaction, but `compute_metrics()` also
+excludes `recurrence != 'one-off'` transactions when computing `top_variable_category`
+and `largest` (the "cutting X% saves Y" and "largest single hit" insights) — you can't
+meaningfully "cut" rent the way you can a discretionary purchase, so those insights are
+based on `variable_total` (spend minus fixed costs), not `spend_total`.
+
 ---
 
 ## 6. Message parsing (`parser.py`)
@@ -174,7 +193,8 @@ oyo 1500 travel
 SIP index fund 5000
 netflix 649
 electricity bill 2200 credit     -> payment_source=credit
-gym membership 12000 yearly      -> period=yearly (cross-cutting/recurring)
+rent 21500 fixed                 -> recurrence=monthly (fixed cost, re-logged every month)
+gym membership 12000 yearly      -> recurrence=yearly (annual cross-cutting)
 ```
 
 **Algorithm (regex-first):**
@@ -184,10 +204,13 @@ gym membership 12000 yearly      -> period=yearly (cross-cutting/recurring)
    (`... travel`), that wins.
 3. Extract **payment_source**: trailing `credit`/`card`/`cc` → `credit`; `salary`/`cash`
    or nothing mentioned → `salary` (the default).
-4. Extract **period**: trailing `yearly`/`annual`/`annually`/`recurring` → `yearly`;
-   otherwise `monthly` (the default).
-5. **note** = message with the amount, an explicit category name, and any payment/period
-   keyword stripped. A keyword-matched category word (e.g. "gym") is *kept* in the note.
+4. Extract **recurrence**: trailing `yearly`/`annual`/`annually` → `yearly`; trailing
+   `recurring`/`fixed`/`subscription` → `monthly` (a fixed cost re-logged every month —
+   rent, a SIP, a subscription); otherwise `one-off` (the default, an ordinary variable
+   purchase).
+5. **note** = message with the amount, an explicit category name, and any
+   payment/recurrence keyword stripped. A keyword-matched category word (e.g. "gym")
+   is *kept* in the note.
 6. `spent_on` = today unless the message contains a parseable date (keep simple: today only for v1).
 7. If **no category** confidently found → **Gemini fallback** (see below).
 8. If **no amount** found → reply asking user to include a number; do not write a row.
@@ -209,7 +232,8 @@ user id (the bot is public once created; this keeps strangers from injecting dat
 **Behaviour:**
 - Any normal text → parse → insert row → reply confirmation:
   `✅ ₹1,500 · Luxuries · gym · 💰 Salary  (id 42)`
-  Credit-tagged expenses show `💳 Credit` instead; recurring ones append `· 🔁 Yearly`.
+  Credit-tagged expenses show `💳 Credit` instead; `recurrence=monthly` appends
+  `· 📌 Fixed`, `recurrence=yearly` appends `· 🔁 Yearly`.
   If Gemini/`Other` fallback was used, append `⚠️ guessed category — reply /cat Food to fix`.
 
 **Commands:**
@@ -273,18 +297,24 @@ re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rup
    `/portfolio <amount>` or a dashboard input). The gap between the two lines is the
    gain or loss, shown as a stat (`₹X` and `%`) above the chart.
 
-7. **Recurring & annual expenses** — list of `period='yearly'` transactions with an
-   annualised total. These still count fully against salary/credit above; this section
-   just keeps cross-cutting costs (e.g. an annual gym membership) visible instead of
-   buried in one month's activity.
+7. **Fixed & recurring expenses** — split by cadence: **Monthly fixed** shows only the
+   latest logged instance of each distinct (category, note) pair tagged
+   `recurrence='monthly'` (rent, subscriptions get re-logged every month, so this is a
+   snapshot of current fixed costs, not a growing history); **Yearly cross-cutting**
+   lists every `recurrence='yearly'` transaction in full (rare enough to stay
+   readable). A combined "≈₹X/month locked in" stat = monthly total + yearly total ÷ 12.
+   These still count fully against salary/credit and spend above; this section just
+   keeps fixed/cross-cutting costs visible and flagged as non-cuttable (see §9) instead
+   of buried in — or mistaken for variable spend within — one month's activity.
 
 8. **Budgets & alerts** — per category with a `monthly_cap`: label + `spent / cap`
    progress bar. Bar is normal color when under, **red when over cap**. Show a
    `WATCH` tag near the cap, `ON TRACK` when comfortably under.
 
 9. **Recent activity** — table: Date · Category (colored dot) · Note · Payment source
-   (💰 Salary / 💳 Credit) · Amount. Yearly-tagged rows get a small "yearly" badge next
-   to the date. Subtitle: "Latest entries logged from Telegram." Most recent first.
+   (💰 Salary / 💳 Credit) · Amount. `recurrence='monthly'` rows get a small "fixed"
+   badge, `recurrence='yearly'` rows get a "yearly" badge, next to the date. Subtitle:
+   "Latest entries logged from Telegram." Most recent first.
 
 10. **🏷 Categories panel** (modal) — add/edit/delete categories (color, kind, monthly
     cap) and their keyword aliases, backed by the `categories`/`keywords` tables via
@@ -309,7 +339,7 @@ GET  /api/monthly                        -> last 6 months total outflow; ?catego
 GET  /api/savings                        -> last 6 months total for kind='saving' categories
 GET  /api/investments                    -> last N months' cumulative contributed vs manually-entered value + gain/loss
 POST /api/investments                    -> upsert {month, value, note} portfolio snapshot
-GET  /api/recurring                      -> period='yearly' transactions + annual total
+GET  /api/recurring                      -> {monthly, yearly, monthly_total, yearly_total, monthly_equivalent_total}
 GET  /api/budgets                        -> [{category, cap, spent, status}]
 GET  /api/transactions                   -> recent rows for the activity table
 GET  /api/categories                     -> categories with their keyword lists
@@ -337,9 +367,14 @@ and understates the real ratio.
   under/over your ₹Y salary + credit."
 - Credit warning: if credit_used ≥ 80% of credit_limit → "Credit usage at ₹X of ₹Y —
   getting close to the limit."
-- Category concentration: top category % of spend_total; "Cutting it 20% saves
-  ₹X/month (₹Y/year)."
-- Largest single expense (excl. savings): "Largest single hit: ₹X on <cat> (<note>)."
+- Fixed vs flexible: fixed_total (`recurrence != 'one-off'`, excl. savings) as % of
+  spend_total → "Fixed costs (rent, subscriptions, etc.) are ₹X/month — Y% of spend.
+  ₹Z is actually flexible."
+- Category concentration (**variable spend only** — excludes both savings and
+  `recurrence != 'one-off'`, since you can't meaningfully "cut" rent or a SIP): top
+  variable category % of variable_total; "Cutting it 20% saves ₹X/month (₹Y/year)."
+- Largest single expense (**variable only**, same exclusions): "Largest single
+  (variable) hit: ₹X on <cat> (<note>)."
 - Discretionary ratio: sum(discretionary)/spend_total; "Discretionary held at N% of spend."
 - Savings: sum(kind='saving') this month; "Put aside ₹X in savings/investments this month."
 
@@ -361,11 +396,15 @@ replacement for the deterministic insights above.
 - **Data sent to Gemini** (`_gather_recap_data`, all pre-computed in Python — Gemini never
   sees raw transactions, only aggregates): today's total + per-category breakdown, last 7
   days' daily totals, this-week vs previous-week total, month-to-date total (incl. and
-  excl. savings), top category, discretionary %, projected month-end, monthly salary,
-  credit limit, and any categories currently over their cap.
+  excl. savings), fixed vs variable spend split, top category and top *variable* category,
+  discretionary %, projected month-end, monthly salary, credit limit, and any categories
+  currently over their cap.
 - **Prompt:** ask for 3-5 short plain-text lines calling out only *notable* patterns
   (trends, spikes, pace vs budget, category shifts, streaks) — explicitly told not to
-  restate every number or produce headers/markdown/preamble. Not meant to be verbose.
+  restate every number or produce headers/markdown/preamble, and explicitly told
+  `fixed_total` (rent, subscriptions, a SIP) isn't something the user chose this month
+  and can't be meaningfully cut, so any "cut back on X" observation must be based on
+  `variable_total`, never fixed costs. Not meant to be verbose.
 - **Fallback:** if `GEMINI_API_KEY` is unset or the call fails for any reason, silently
   fall back to `insights.build_insights()` (still cached, tagged `source: 'fallback'` so
   the UI can show which one it got) — the recap card and `/recap` command never error out.

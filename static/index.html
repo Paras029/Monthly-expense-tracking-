@@ -154,15 +154,21 @@
     <div class="h-56"><canvas id="investments-chart"></canvas></div>
   </section>
 
-  <!-- Recurring & annual expenses -->
+  <!-- Fixed & recurring expenses -->
   <section class="card p-4">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="font-medium">Recurring &amp; annual expenses</h2>
-      <span id="recurring-total" class="text-sm text-muted">₹0/yr</span>
+      <h2 class="font-medium">Fixed &amp; recurring expenses</h2>
+      <span id="recurring-total" class="text-sm text-muted">≈₹0/month locked in</span>
     </div>
-    <p class="text-xs text-muted mb-3">Cross-cutting costs tagged 'yearly' — still counted in salary/credit above, tracked here so they don't get lost in one month's noise.</p>
-    <div id="recurring-list" class="space-y-2 text-sm"></div>
-    <p id="recurring-empty" class="text-sm text-muted hidden">No recurring expenses logged yet. Tag one with "yearly", e.g. "gym membership 12000 yearly".</p>
+    <p class="text-xs text-muted mb-3">Costs tagged 'fixed'/'recurring' (monthly) or 'yearly' (annual) — still counted in salary/credit and spend above, but insights treat them as non-cuttable rather than variable spend.</p>
+
+    <p class="text-xs text-muted uppercase tracking-wide mb-1.5">📌 Monthly fixed</p>
+    <div id="recurring-monthly-list" class="space-y-2 text-sm mb-4"></div>
+    <p id="recurring-monthly-empty" class="text-sm text-muted hidden mb-4">None yet. Tag one with "fixed"/"recurring", e.g. "rent 21500 fixed".</p>
+
+    <p class="text-xs text-muted uppercase tracking-wide mb-1.5">🔁 Yearly cross-cutting</p>
+    <div id="recurring-yearly-list" class="space-y-2 text-sm"></div>
+    <p id="recurring-yearly-empty" class="text-sm text-muted hidden">None yet. Tag one with "yearly", e.g. "gym membership 12000 yearly".</p>
   </section>
 
   <!-- Budgets & alerts -->
@@ -289,6 +295,16 @@ function statusIcon(status) {
 
 function statusColor(status) {
   return { good: 'text-emerald-400', watch: 'text-amber-400', note: 'text-sky-400' }[status] || 'text-muted';
+}
+
+function recurrenceBadge(recurrence) {
+  if (recurrence === 'yearly') {
+    return ' <span class="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300">yearly</span>';
+  }
+  if (recurrence === 'monthly') {
+    return ' <span class="text-[10px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-300">fixed</span>';
+  }
+  return '';
 }
 
 async function loadSummary(month) {
@@ -580,27 +596,31 @@ async function loadInvestments(month) {
   });
 }
 
-async function loadRecurring() {
-  const d = await fetchJSON('/api/recurring');
-  const list = document.getElementById('recurring-list');
-  const empty = document.getElementById('recurring-empty');
-  document.getElementById('recurring-total').textContent = `${fmtINR(d.total)}/yr`;
-
-  if (!d.transactions.length) {
+function renderRecurringGroup(items, listId, emptyId, suffix) {
+  const list = document.getElementById(listId);
+  const empty = document.getElementById(emptyId);
+  if (!items.length) {
     list.innerHTML = '';
     empty.classList.remove('hidden');
     return;
   }
   empty.classList.add('hidden');
-  list.innerHTML = d.transactions.map(t => `
+  list.innerHTML = items.map(t => `
     <div class="flex items-center justify-between border-b border-[#1e2129] pb-2">
       <span>
         <span class="text-muted">${t.spent_on}</span>
         · ${t.category} ${t.note ? '· ' + t.note : ''}
       </span>
-      <span>${fmtINR(t.amount)}</span>
+      <span>${fmtINR(t.amount)}${suffix}</span>
     </div>
   `).join('');
+}
+
+async function loadRecurring() {
+  const d = await fetchJSON('/api/recurring');
+  document.getElementById('recurring-total').textContent = `≈${fmtINR(d.monthly_equivalent_total)}/month locked in`;
+  renderRecurringGroup(d.monthly, 'recurring-monthly-list', 'recurring-monthly-empty', '/mo');
+  renderRecurringGroup(d.yearly, 'recurring-yearly-list', 'recurring-yearly-empty', '/yr');
 }
 
 async function loadBudgets(month) {
@@ -644,7 +664,7 @@ async function loadTransactions(month) {
 
   body.innerHTML = d.transactions.map(t => `
     <tr class="border-b border-[#1e2129]">
-      <td class="py-2 pr-4 text-muted">${t.spent_on}${t.period === 'yearly' ? ' <span class=\"text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300\">yearly</span>' : ''}</td>
+      <td class="py-2 pr-4 text-muted">${t.spent_on}${recurrenceBadge(t.recurrence)}</td>
       <td class="py-2 pr-4">
         <span class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full inline-block" style="background:${categoryColorMap[t.category] || '#64748b'}"></span>

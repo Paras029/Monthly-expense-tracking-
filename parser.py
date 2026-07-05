@@ -89,14 +89,24 @@ def extract_payment_source(message):
     return "salary", None
 
 
-def extract_period(message):
-    """Returns (period, strip_span). Defaults to 'monthly' with no span."""
+def extract_recurrence(message):
+    """Returns (recurrence, strip_span). Defaults to 'one-off' with no span.
+
+    'yearly' = an annual cross-cutting cost. 'monthly' = a fixed cost that
+    recurs every month at roughly the same amount (rent, a SIP, a
+    subscription) — flagged so insights don't treat it like a variable
+    purchase you could just decide to spend less on.
+    """
     lower = message.lower()
-    for keyword in config.RECURRING_KEYWORDS:
+    for keyword in config.YEARLY_KEYWORDS:
         match = re.search(rf"\b{re.escape(keyword)}\b", lower)
         if match:
             return "yearly", match.span()
-    return "monthly", None
+    for keyword in config.MONTHLY_FIXED_KEYWORDS:
+        match = re.search(rf"\b{re.escape(keyword)}\b", lower)
+        if match:
+            return "monthly", match.span()
+    return "one-off", None
 
 
 def strip_note(message, spans):
@@ -134,7 +144,7 @@ def classify_with_gemini(note):
 
 def parse_message(message):
     """Returns a dict: {amount, category, note, guessed, payment_source,
-    period} or {error: str} if the message has no parseable amount.
+    recurrence} or {error: str} if the message has no parseable amount.
     """
     amount = extract_amount(message)
     if amount is None:
@@ -143,9 +153,9 @@ def parse_message(message):
     amount_match = AMOUNT_RE.search(message)
     category, category_span = extract_category(message)
     payment_source, payment_span = extract_payment_source(message)
-    period, period_span = extract_period(message)
+    recurrence, recurrence_span = extract_recurrence(message)
 
-    note = strip_note(message, [amount_match.span(), category_span, payment_span, period_span])
+    note = strip_note(message, [amount_match.span(), category_span, payment_span, recurrence_span])
 
     guessed = False
     if category is None:
@@ -158,5 +168,5 @@ def parse_message(message):
         "note": note,
         "guessed": guessed,
         "payment_source": payment_source,
-        "period": period,
+        "recurrence": recurrence,
     }

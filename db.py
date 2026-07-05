@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   source         TEXT DEFAULT 'telegram',
   guessed        INTEGER DEFAULT 0,
   payment_source TEXT DEFAULT 'salary',
-  period         TEXT DEFAULT 'monthly'
+  period         TEXT DEFAULT 'monthly',    -- deprecated, superseded by recurrence
+  recurrence     TEXT DEFAULT 'one-off'     -- 'one-off' | 'monthly' | 'yearly' (fixed/cross-cutting)
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS ai_recaps (
 TRANSACTION_MIGRATIONS = {
     "payment_source": "TEXT DEFAULT 'salary'",
     "period": "TEXT DEFAULT 'monthly'",
+    "recurrence": "TEXT DEFAULT 'one-off'",
 }
 
 
@@ -73,9 +75,35 @@ def get_conn():
 
 def _migrate_transactions(conn):
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(transactions)")}
+    is_fresh_recurrence_column = "recurrence" not in existing
     for column, decl in TRANSACTION_MIGRATIONS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE transactions ADD COLUMN {column} {decl}")
+
+    if is_fresh_recurrence_column:
+        # backfill from the old period column: it only ever distinguished
+        # 'yearly' (cross-cutting) from its default 'monthly' (which really
+        # just meant "not yearly", i.e. an ordinary one-off transaction)
+        conn.execute("UPDATE transactions SET recurrence = 'yearly' WHERE period = 'yearly'")
+
+
+def _migrate_investments_kind(conn):
+    # INSERT OR IGNORE (below) never touches a category that already exists,
+    # so a DB created before Investments was reclassified 'essential' ->
+    # 'saving' is stuck on the old value forever unless fixed explicitly.
+    # Guarded by a one-time flag so it never fights a user's own later edit
+    # back to 'essential' via the Categories panel.
+    already_migrated = conn.execute(
+        "SELECT 1 FROM settings WHERE key = 'migrated_investments_kind'"
+    ).fetchone()
+    if already_migrated:
+        return
+    conn.execute(
+        "UPDATE categories SET kind = 'saving' WHERE name = 'Investments' AND kind = 'essential'"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('migrated_investments_kind', '1')"
+    )
 
 
 def init_db():
@@ -89,6 +117,8 @@ def init_db():
                 "VALUES (?, ?, ?, ?)",
                 (name, meta["color"], meta["kind"], meta["monthly_cap"]),
             )
+
+        _migrate_investments_kind(conn)
 
         for category, keywords in config.CATEGORY_KEYWORDS.items():
             for keyword in keywords:
@@ -114,16 +144,16 @@ def init_db():
 
 def insert_transaction(category, note, amount, raw_message, spent_on=None,
                         source="telegram", guessed=False, payment_source="salary",
-                        period="monthly"):
+                        recurrence="one-off"):
     spent_on = spent_on or datetime.now().strftime("%Y-%m-%d")
     ts = datetime.now().isoformat(timespec="seconds")
     with get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO transactions (ts, spent_on, category, note, amount, "
-            "raw_message, source, guessed, payment_source, period) "
+            "raw_message, source, guessed, payment_source, recurrence) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ts, spent_on, category, note, amount, raw_message, source,
-             int(guessed), payment_source, period),
+             int(guessed), payment_source, recurrence),
         )
         return cur.lastrowid
 
@@ -225,10 +255,32 @@ def get_cumulative_savings_contributions(months):
         return out
 
 
-def get_recurring_transactions(limit=100):
+def get_fixed_monthly_costs():
+    """Latest logged instance of each distinct (category, note) pair tagged
+    recurrence='monthly' — a snapshot of current fixed monthly costs (rent,
+    subscriptions), not a growing history, since the user re-logs these
+    every month. Grouped by (category, note) rather than just category so
+    two different fixed costs in the same category (e.g. Rent and a
+    maintenance fee, both 'Bills') don't collapse into one."""
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM transactions WHERE period = 'yearly' "
+            "SELECT t.* FROM transactions t "
+            "INNER JOIN ("
+            "  SELECT category, COALESCE(note, '') AS note_key, MAX(id) AS max_id "
+            "  FROM transactions WHERE recurrence = 'monthly' "
+            "  GROUP BY category, COALESCE(note, '')"
+            ") latest ON t.id = latest.max_id "
+            "ORDER BY t.amount DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_yearly_costs(limit=100):
+    """All-time list of recurrence='yearly' transactions, most recent
+    first — these are rare enough that a full history stays readable."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM transactions WHERE recurrence = 'yearly' "
             "ORDER BY spent_on DESC, id DESC LIMIT ?",
             (limit,),
         ).fetchall()

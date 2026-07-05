@@ -24,10 +24,13 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
   `Zomato lunch 300`, `oyo 1500 travel`.
 - **Pay by credit card:** add `credit` (or `card`/`cc`), e.g.
   `electricity bill 2200 credit`. Default payment source is your salary.
-- **Tag a recurring/annual cost:** add `yearly` (or `annual`/`recurring`), e.g.
-  `gym membership 12000 yearly`. It still counts against this month's
-  salary/credit, but shows up in its own "Recurring & annual expenses" section
-  on the dashboard instead of skewing one month's numbers.
+- **Tag a fixed monthly cost:** add `fixed` (or `recurring`/`subscription`), e.g.
+  `rent 21500 fixed`. It still counts against this month's salary/credit, but
+  insights won't suggest "cutting" it the way they would a variable purchase.
+- **Tag an annual cross-cutting cost:** add `yearly` (or `annual`/`annually`), e.g.
+  `gym membership 12000 yearly`. Same idea, for costs paid once a year — both
+  show up in the dashboard's "Fixed & recurring expenses" section instead of
+  skewing one month's numbers.
 - **Set your salary/credit limit:** `/salary 60000`, `/credit 20000` on the
   bot, or via the ⚙ Settings panel on the dashboard.
 - **View the dashboard:** open `http://localhost:8000` on the tablet, or
