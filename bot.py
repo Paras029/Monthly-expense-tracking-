@@ -83,7 +83,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/salary <amount> — set your monthly salary\n"
         "/credit <amount> — set your credit limit\n"
         "/portfolio <amount> — log this month's total investment value "
-        "(for gain/loss tracking vs what you've contributed)"
+        "(for gain/loss tracking vs what you've contributed)\n"
+        "/recap — AI day-by-day + cumulative spending analysis (cached once/day; "
+        "/recap refresh to force a new one)"
     )
 
 
@@ -236,6 +238,23 @@ async def cmd_insights(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_recap(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    from datetime import date
+
+    import ai_insights
+
+    force = bool(context.args and context.args[0].lower() in ("refresh", "force"))
+    today = date.today().strftime("%Y-%m-%d")
+    result = ai_insights.generate_recap(today, force=force)
+    prefix = "✨" if result["source"] == "ai" else "→"
+    lines = [f"{prefix} {l}" for l in result["lines"]]
+    if result["source"] == "fallback":
+        lines.append("(rule-based fallback — set GEMINI_API_KEY for AI analysis)")
+    await update.message.reply_text("\n".join(lines))
+
+
 def build_application() -> Application:
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
@@ -248,6 +267,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("salary", cmd_salary))
     app.add_handler(CommandHandler("credit", cmd_credit))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
+    app.add_handler(CommandHandler("recap", cmd_recap))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     return app

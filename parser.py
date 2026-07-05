@@ -14,7 +14,9 @@ _gemini_cache = {}
 _gemini_client = None
 
 
-def _get_gemini_client():
+def get_gemini_client():
+    """Shared lazily-created client — also used by ai_insights.py so both
+    Gemini call sites (category fallback, daily recap) reuse one instance."""
     global _gemini_client
     if _gemini_client is None and config.GEMINI_API_KEY:
         from google import genai
@@ -90,7 +92,7 @@ def classify_with_gemini(note):
     if note in _gemini_cache:
         return _gemini_cache[note]
 
-    client = _get_gemini_client()
+    client = get_gemini_client()
     if client is None:
         return "Other"
 

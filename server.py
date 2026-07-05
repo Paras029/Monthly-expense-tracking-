@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import ai_insights
 import db
 import insights
 
@@ -16,6 +17,10 @@ app = FastAPI(title="Personal Cashflow Ledger")
 
 def _current_month() -> str:
     return date.today().strftime("%Y-%m")
+
+
+def _today_str() -> str:
+    return date.today().strftime("%Y-%m-%d")
 
 
 def _last_n_months(n: int, month: str) -> list[str]:
@@ -84,6 +89,19 @@ def api_summary(month: str = Query(default=None)):
 def api_insights(month: str = Query(default=None)):
     month = month or _current_month()
     return {"month": month, "insights": insights.build_insights(month)}
+
+
+@app.get("/api/recap")
+def api_recap(date_: str = Query(default=None, alias="date")):
+    """Cached AI daily recap — at most one Gemini call per day unless refreshed."""
+    day = date_ or _today_str()
+    return {"date": day, **ai_insights.generate_recap(day, force=False)}
+
+
+@app.post("/api/recap/refresh")
+def api_recap_refresh(date_: str = Query(default=None, alias="date")):
+    day = date_ or _today_str()
+    return {"date": day, **ai_insights.generate_recap(day, force=True)}
 
 
 @app.get("/api/daily-burn")

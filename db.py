@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS investment_snapshots (
   value REAL NOT NULL,      -- total portfolio value as of this month (manually entered)
   note  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS ai_recaps (
+  date          TEXT PRIMARY KEY,  -- 'YYYY-MM-DD', the day the recap covers
+  text          TEXT NOT NULL,     -- newline-separated analysis lines
+  source        TEXT NOT NULL,     -- 'ai' | 'fallback'
+  generated_at  TEXT NOT NULL
+);
 """
 
 # columns that may be missing on a DB created by an earlier version of the app
@@ -349,3 +356,28 @@ def set_investment_snapshot(month, value, note=None):
             "ON CONFLICT(month) DO UPDATE SET value = excluded.value, note = excluded.note",
             (month, value, note),
         )
+
+
+# ---- AI daily recap (cached, at most once/day unless force-refreshed) ----
+
+def get_ai_recap(date_str):
+    """Returns {text, source, generated_at} for a cached recap, or None."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT text, source, generated_at FROM ai_recaps WHERE date = ?",
+            (date_str,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_ai_recap(date_str, text, source):
+    """Returns the generated_at timestamp that was written."""
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO ai_recaps (date, text, source, generated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(date) DO UPDATE SET text = excluded.text, source = excluded.source, "
+            "generated_at = excluded.generated_at",
+            (date_str, text, source, generated_at),
+        )
+    return generated_at

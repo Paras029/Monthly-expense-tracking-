@@ -69,7 +69,8 @@ expense-tracker/
 ├── config.py            # env, categories, colors, keyword aliases
 ├── db.py                # schema init + all queries
 ├── parser.py            # regex-first parse + Gemini fallback classify
-├── insights.py          # compute metrics + phrase insight bullets
+├── insights.py          # compute metrics + phrase insight bullets (no Gemini)
+├── ai_insights.py       # AI daily recap: cached, ~1 Gemini call/day, rule-based fallback
 ├── bot.py               # Telegram handlers  ← ONLY file to swap for WhatsApp
 ├── server.py            # FastAPI app + JSON API + serves dashboard
 ├── main.py              # entrypoint: asyncio.gather(bot, uvicorn)
@@ -217,6 +218,7 @@ user id (the bot is public once created; this keeps strangers from injecting dat
 | `/salary <amount>`  | set monthly salary (no arg = show current value)               |
 | `/credit <amount>`  | set credit limit (no arg = show current value)                 |
 | `/portfolio <amount>` | log this month's total investment/portfolio value (no arg = show current value) |
+| `/recap` (or `/recap refresh`) | AI day-by-day + cumulative analysis (see §9); cached once/day, `refresh` forces a new one |
 
 ---
 
@@ -239,6 +241,11 @@ re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rup
 
 3. **Spending insights** — bullet list from `insights.py` (see §9). Small status icon
    per bullet (✓ good / ⚠ watch / → note).
+
+3b. **✨ Daily recap** — AI-generated (or rule-based fallback) day-by-day + cumulative
+   analysis from `ai_insights.py` (see §9). Loads the cached recap for today on page
+   load (zero extra Gemini calls); a "↻ Refresh" button force-regenerates. Shows which
+   source produced it (`AI-generated` vs `Rule-based fallback`) and a timestamp.
 
 4. **Daily burn** — line chart: cumulative spend per day vs a straight dashed
    even-pace reference line. A category dropdown (shared with §5's Month over month
@@ -289,6 +296,8 @@ plain JSON, since none of that depends on the chart library being present.
 ```
 GET  /api/summary                        -> cards + category breakdown (excl. savings) + pace + insights inputs
 GET  /api/insights                       -> list of insight bullet strings + status
+GET  /api/recap                          -> cached AI daily recap {lines, source, generated_at}
+POST /api/recap/refresh                  -> force-regenerate today's recap (bypasses cache)
 GET  /api/daily-burn                     -> [{day, cumulative}], plus reference-line params; ?category= to filter
 GET  /api/monthly                        -> last 6 months total outflow; ?category= to filter to one category
 GET  /api/savings                        -> last 6 months total for kind='saving' categories
@@ -312,20 +321,48 @@ Bind uvicorn to `0.0.0.0:8000` so the tablet's LAN IP works from the phone.
 
 ## 9. Insights (`insights.py`)
 
-Compute the **metrics with plain Python** (deterministic, free), then optionally use
-Gemini only to phrase them into natural sentences. If no API key, use string templates.
+Compute the **metrics with plain Python** (deterministic, free, no Gemini call here at
+all) and phrase them with string templates. `discretionary_pct` divides by `spend_total`
+(excludes `kind='saving'`), not `total` — otherwise a big SIP payment inflates the base
+and understates the real ratio.
 
 **Metrics to compute** (mirror the reference insights):
 - On-pace check: projected month-end vs (salary + credit_limit) → "On pace for ₹X,
   under/over your ₹Y salary + credit."
 - Credit warning: if credit_used ≥ 80% of credit_limit → "Credit usage at ₹X of ₹Y —
   getting close to the limit."
-- Category concentration: top category %; "Cutting it 20% saves ₹X/month (₹Y/year)."
-- Largest single expense: "Largest single hit: ₹X on <cat> (<note>)."
-- Discretionary ratio: sum(discretionary)/total; "Discretionary held at N%."
+- Category concentration: top category % of spend_total; "Cutting it 20% saves
+  ₹X/month (₹Y/year)."
+- Largest single expense (excl. savings): "Largest single hit: ₹X on <cat> (<note>)."
+- Discretionary ratio: sum(discretionary)/spend_total; "Discretionary held at N% of spend."
 - Savings: sum(kind='saving') this month; "Put aside ₹X in savings/investments this month."
 
 Return a list of `{text, status}` where status ∈ `good | watch | note`.
+
+### AI daily recap (`ai_insights.py`)
+
+The **only other** Gemini call site besides `parser.classify_with_gemini()`. Deliberately
+a separate module so `insights.py` stays pure-Python — this is additive, not a
+replacement for the deterministic insights above.
+
+- **Cadence:** capped at roughly once per day. Result is cached in the `ai_recaps` table
+  keyed by date; a cache hit costs zero API calls. A cache miss (first check of the day,
+  or an explicit refresh) calls Gemini once and caches the result.
+- **Trigger:** dashboard "✨ Daily recap" card loads the cached recap on page load; its
+  "↻ Refresh" button force-regenerates. Telegram: `/recap` (cached) or `/recap refresh`
+  (force). No background scheduler — generation is lazy, triggered by whichever of these
+  the user hits first each day.
+- **Data sent to Gemini** (`_gather_recap_data`, all pre-computed in Python — Gemini never
+  sees raw transactions, only aggregates): today's total + per-category breakdown, last 7
+  days' daily totals, this-week vs previous-week total, month-to-date total (incl. and
+  excl. savings), top category, discretionary %, projected month-end, monthly salary,
+  credit limit, and any categories currently over their cap.
+- **Prompt:** ask for 3-5 short plain-text lines calling out only *notable* patterns
+  (trends, spikes, pace vs budget, category shifts, streaks) — explicitly told not to
+  restate every number or produce headers/markdown/preamble. Not meant to be verbose.
+- **Fallback:** if `GEMINI_API_KEY` is unset or the call fails for any reason, silently
+  fall back to `insights.build_insights()` (still cached, tagged `source: 'fallback'` so
+  the UI can show which one it got) — the recap card and `/recap` command never error out.
 
 ---
 

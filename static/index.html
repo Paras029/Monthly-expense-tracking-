@@ -106,6 +106,16 @@
     <ul id="insights-list" class="space-y-2 text-sm"></ul>
   </section>
 
+  <!-- AI daily recap -->
+  <section class="card p-4">
+    <div class="flex items-center justify-between mb-1">
+      <h2 class="font-medium">✨ Daily recap</h2>
+      <button id="refresh-recap" class="text-xs icon-btn card px-2 py-1">↻ Refresh</button>
+    </div>
+    <p id="recap-source" class="text-xs text-muted mb-2"></p>
+    <ul id="recap-list" class="space-y-2 text-sm"></ul>
+  </section>
+
   <!-- Daily burn -->
   <section class="card p-4">
     <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -350,6 +360,25 @@ async function loadInsights(month) {
       <span>${i.text}</span>
     </li>
   `).join('') || '<li class="text-muted">Not enough data yet for insights.</li>';
+}
+
+function renderRecap(result) {
+  const list = document.getElementById('recap-list');
+  const sourceEl = document.getElementById('recap-source');
+  list.innerHTML = result.lines.map(line => `
+    <li class="flex items-start gap-2">
+      <span class="text-amber-400">✨</span>
+      <span>${line}</span>
+    </li>
+  `).join('');
+  sourceEl.textContent = result.source === 'ai'
+    ? `AI-generated · ${result.generated_at}`
+    : `Rule-based fallback (no Gemini key, or the call failed) · ${result.generated_at}`;
+}
+
+async function loadRecap() {
+  const result = await fetchJSON('/api/recap');
+  renderRecap(result);
 }
 
 async function loadDailyBurn(month, category) {
@@ -661,6 +690,20 @@ async function loadAll() {
 
 monthPicker.addEventListener('change', loadAll);
 loadAll();
+loadRecap().catch((e) => console.error(e));
+
+document.getElementById('refresh-recap').addEventListener('click', async () => {
+  const btn = document.getElementById('refresh-recap');
+  btn.disabled = true;
+  btn.textContent = '↻ Refreshing…';
+  try {
+    const result = await (await fetch('/api/recap/refresh', { method: 'POST' })).json();
+    renderRecap(result);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ Refresh';
+  }
+});
 
 document.getElementById('category-filter').addEventListener('change', (e) => {
   selectedCategory = e.target.value;
