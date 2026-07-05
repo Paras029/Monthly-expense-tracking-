@@ -1,0 +1,5 @@
+python-telegram-bot>=22.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
+google-genai>=0.3.0
+python-dotenv>=1.0

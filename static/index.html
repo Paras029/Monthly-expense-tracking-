@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Personal Cashflow Ledger</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          surface: '#0f1117',
+          panel: '#171a23',
+          border: '#262a36',
+          muted: '#8b8fa3',
+        }
+      }
+    }
+  }
+</script>
+<style>
+  body { background: #0f1117; color: #e6e7ec; }
+  .card { background: #171a23; border: 1px solid #262a36; border-radius: 0.75rem; }
+  ::-webkit-scrollbar { height: 6px; width: 6px; }
+  ::-webkit-scrollbar-thumb { background: #2a2e3a; border-radius: 4px; }
+</style>
+</head>
+<body class="min-h-screen antialiased">
+<div class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+
+  <header class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-semibold tracking-tight">Personal Cashflow Ledger</h1>
+      <p class="text-sm text-muted">where every rupee went.</p>
+    </div>
+    <input id="month-picker" type="month" class="card px-3 py-1.5 text-sm text-white [color-scheme:dark]" />
+  </header>
+
+  <!-- Summary cards -->
+  <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="card p-4">
+      <p class="text-xs text-muted uppercase tracking-wide">Spent this month</p>
+      <p id="card-spent" class="text-2xl font-semibold mt-1">₹0</p>
+      <p id="card-spent-sub" class="text-xs text-muted mt-1">0% of ₹0 used</p>
+      <div class="h-1.5 rounded-full bg-[#262a36] mt-2 overflow-hidden">
+        <div id="card-spent-bar" class="h-full bg-amber-500" style="width:0%"></div>
+      </div>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-muted uppercase tracking-wide">Budget left</p>
+      <p id="card-left" class="text-2xl font-semibold mt-1">₹0</p>
+      <p id="card-left-sub" class="text-xs text-muted mt-1">₹0/day for 0 days left</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-muted uppercase tracking-wide">Top category</p>
+      <p id="card-top" class="text-2xl font-semibold mt-1">—</p>
+      <p id="card-top-sub" class="text-xs text-muted mt-1">0% of spend</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-muted uppercase tracking-wide">Projected month-end</p>
+      <p id="card-proj" class="text-2xl font-semibold mt-1">₹0</p>
+      <p id="card-proj-sub" class="text-xs text-muted mt-1">₹0/day pace</p>
+    </div>
+  </section>
+
+  <!-- Where the money goes -->
+  <section class="card p-4">
+    <h2 class="font-medium mb-3">Where the money goes</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+      <div class="relative h-64">
+        <canvas id="donut-chart"></canvas>
+        <div id="donut-center" class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <span class="text-xs text-muted">Total</span>
+          <span id="donut-total" class="text-lg font-semibold">₹0</span>
+        </div>
+      </div>
+      <ul id="legend-list" class="space-y-2 text-sm"></ul>
+    </div>
+  </section>
+
+  <!-- Spending insights -->
+  <section class="card p-4">
+    <h2 class="font-medium mb-3">Spending insights</h2>
+    <ul id="insights-list" class="space-y-2 text-sm"></ul>
+  </section>
+
+  <!-- Daily burn -->
+  <section class="card p-4">
+    <h2 class="font-medium mb-3">Daily burn</h2>
+    <div class="h-64"><canvas id="burn-chart"></canvas></div>
+  </section>
+
+  <!-- Month over month -->
+  <section class="card p-4">
+    <h2 class="font-medium mb-3">Month over month</h2>
+    <div class="h-56"><canvas id="monthly-chart"></canvas></div>
+  </section>
+
+  <!-- Budgets & alerts -->
+  <section class="card p-4">
+    <h2 class="font-medium mb-3">Budgets &amp; alerts</h2>
+    <div id="budgets-list" class="space-y-4"></div>
+    <p id="budgets-empty" class="text-sm text-muted hidden">No category caps set yet.</p>
+  </section>
+
+  <!-- Recent activity -->
+  <section class="card p-4">
+    <h2 class="font-medium">Recent activity</h2>
+    <p class="text-xs text-muted mb-3">Latest entries logged from Telegram.</p>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-muted border-b border-[#262a36]">
+            <th class="py-2 pr-4 font-normal">Date</th>
+            <th class="py-2 pr-4 font-normal">Category</th>
+            <th class="py-2 pr-4 font-normal">Note</th>
+            <th class="py-2 pr-4 font-normal text-right">Amount</th>
+          </tr>
+        </thead>
+        <tbody id="transactions-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+
+<script>
+const fmtINR = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+const monthPicker = document.getElementById('month-picker');
+
+function currentMonthStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+monthPicker.value = currentMonthStr();
+
+let donutChart, burnChart, monthlyChart;
+
+async function fetchJSON(path, month) {
+  const res = await fetch(`${path}?month=${month}`);
+  return res.json();
+}
+
+function statusIcon(status) {
+  return { good: '✓', watch: '⚠', note: '→' }[status] || '•';
+}
+
+function statusColor(status) {
+  return { good: 'text-emerald-400', watch: 'text-amber-400', note: 'text-sky-400' }[status] || 'text-muted';
+}
+
+async function loadSummary(month) {
+  const s = await fetchJSON('/api/summary', month);
+
+  document.getElementById('card-spent').textContent = fmtINR(s.spent);
+  document.getElementById('card-spent-sub').textContent = `${s.pct_used.toFixed(0)}% of ${fmtINR(s.budget)} used`;
+  document.getElementById('card-spent-bar').style.width = Math.min(s.pct_used, 100) + '%';
+  document.getElementById('card-spent-bar').className = 'h-full ' + (s.pct_used > 100 ? 'bg-red-500' : 'bg-amber-500');
+
+  document.getElementById('card-left').textContent = fmtINR(s.budget_left);
+  document.getElementById('card-left-sub').textContent = `${fmtINR(s.per_day_left)}/day for ${s.days_left} days left`;
+
+  document.getElementById('card-top').textContent = s.top_category || '—';
+  document.getElementById('card-top-sub').textContent = `${fmtINR(s.top_amount)} · ${s.top_pct.toFixed(0)}% of spend`;
+
+  document.getElementById('card-proj').textContent = fmtINR(s.projected);
+  document.getElementById('card-proj-sub').textContent = `${fmtINR(s.pace_per_day)}/day pace`;
+
+  document.getElementById('donut-total').textContent = fmtINR(s.spent);
+
+  const labels = s.breakdown.map(b => b.category);
+  const data = s.breakdown.map(b => b.amount);
+  const colors = s.breakdown.map(b => b.color);
+
+  if (donutChart) donutChart.destroy();
+  donutChart = new Chart(document.getElementById('donut-chart'), {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: '#171a23', borderWidth: 2 }] },
+    options: {
+      cutout: '70%',
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmtINR(ctx.raw)}` } },
+      },
+    },
+  });
+
+  const legendList = document.getElementById('legend-list');
+  legendList.innerHTML = s.breakdown.map(b => `
+    <li class="flex items-center justify-between">
+      <span class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full inline-block" style="background:${b.color}"></span>
+        ${b.category}
+      </span>
+      <span class="text-muted">${fmtINR(b.amount)} · ${b.pct.toFixed(0)}%</span>
+    </li>
+  `).join('') || '<li class="text-muted">No spend logged yet.</li>';
+}
+
+async function loadInsights(month) {
+  const data = await fetchJSON('/api/insights', month);
+  const list = document.getElementById('insights-list');
+  list.innerHTML = data.insights.map(i => `
+    <li class="flex items-start gap-2">
+      <span class="${statusColor(i.status)}">${statusIcon(i.status)}</span>
+      <span>${i.text}</span>
+    </li>
+  `).join('') || '<li class="text-muted">Not enough data yet for insights.</li>';
+}
+
+async function loadDailyBurn(month) {
+  const d = await fetchJSON('/api/daily-burn', month);
+  const labels = d.series.map(p => p.day);
+  const cumulative = d.series.map(p => p.cumulative);
+  const budgetLine = d.series.map(p => d.budget_per_day * p.day);
+
+  if (burnChart) burnChart.destroy();
+  burnChart = new Chart(document.getElementById('burn-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Cumulative spend',
+          data: cumulative,
+          borderColor: '#f59e0b',
+          backgroundColor: 'rgba(245,158,11,0.1)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 0,
+          borderWidth: 2,
+        },
+        {
+          label: 'Even-pace budget',
+          data: budgetLine,
+          borderColor: '#64748b',
+          borderDash: [6, 4],
+          pointRadius: 0,
+          borderWidth: 1.5,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#8b8fa3' } },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtINR(ctx.raw)}` } },
+      },
+      scales: {
+        x: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3' } },
+        y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+      },
+    },
+  });
+}
+
+async function loadMonthly(month) {
+  const d = await fetchJSON('/api/monthly', month);
+  const labels = d.months.map(m => m.month);
+  const totals = d.months.map(m => m.total);
+  const current = month;
+  const colors = d.months.map(m => (m.month === current ? '#f59e0b' : '#3b3f4d'));
+
+  if (monthlyChart) monthlyChart.destroy();
+  monthlyChart = new Chart(document.getElementById('monthly-chart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data: totals, backgroundColor: colors, borderRadius: 4, maxBarThickness: 40 }] },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => fmtINR(ctx.raw) } },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
+        y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+      },
+    },
+  });
+}
+
+async function loadBudgets(month) {
+  const d = await fetchJSON('/api/budgets', month);
+  const list = document.getElementById('budgets-list');
+  const empty = document.getElementById('budgets-empty');
+
+  if (!d.budgets.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  const tagClass = {
+    'OVER': 'bg-red-500/20 text-red-400',
+    'WATCH': 'bg-amber-500/20 text-amber-400',
+    'ON TRACK': 'bg-emerald-500/20 text-emerald-400',
+  };
+
+  list.innerHTML = d.budgets.map(b => `
+    <div>
+      <div class="flex items-center justify-between text-sm mb-1">
+        <span class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full inline-block" style="background:${b.color}"></span>
+          ${b.category}
+          <span class="text-[10px] px-1.5 py-0.5 rounded ${tagClass[b.status]}">${b.status}</span>
+        </span>
+        <span class="text-muted">${fmtINR(b.spent)} / ${fmtINR(b.cap)}</span>
+      </div>
+      <div class="h-1.5 rounded-full bg-[#262a36] overflow-hidden">
+        <div class="h-full ${b.pct >= 100 ? 'bg-red-500' : 'bg-amber-500'}" style="width:${Math.min(b.pct, 100)}%"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadTransactions(month) {
+  const d = await fetchJSON('/api/transactions', month);
+  const body = document.getElementById('transactions-body');
+  const categories = {};
+  const s = await fetchJSON('/api/summary', month);
+  s.breakdown.forEach(b => categories[b.category] = b.color);
+
+  body.innerHTML = d.transactions.map(t => `
+    <tr class="border-b border-[#1e2129]">
+      <td class="py-2 pr-4 text-muted">${t.spent_on}</td>
+      <td class="py-2 pr-4">
+        <span class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full inline-block" style="background:${categories[t.category] || '#64748b'}"></span>
+          ${t.category}
+        </span>
+      </td>
+      <td class="py-2 pr-4 text-muted">${t.note || ''}</td>
+      <td class="py-2 pr-4 text-right">${fmtINR(t.amount)}</td>
+    </tr>
+  `).join('') || `<tr><td colspan="4" class="py-4 text-center text-muted">No transactions yet.</td></tr>`;
+}
+
+async function loadAll() {
+  const month = monthPicker.value || currentMonthStr();
+  await Promise.all([
+    loadSummary(month),
+    loadInsights(month),
+    loadDailyBurn(month),
+    loadMonthly(month),
+    loadBudgets(month),
+    loadTransactions(month),
+  ]);
+}
+
+monthPicker.addEventListener('change', loadAll);
+loadAll();
+</script>
+</body>
+</html>
