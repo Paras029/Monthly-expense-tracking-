@@ -1,7 +1,8 @@
 """Deterministic metrics + phrased insight bullets for the monthly dashboard.
 
-Metrics are always computed in plain Python (free, exact). Gemini is only
-used, optionally, to rephrase them into natural sentences.
+Metrics are computed in plain Python (free, exact) and phrased with string
+templates — no Gemini call happens here. The only Gemini usage in the app is
+parser.classify_with_gemini(), for category fallback when regex/keywords miss.
 """
 from calendar import monthrange
 from datetime import date
@@ -66,7 +67,9 @@ def compute_metrics(month):
         amount for cat, amount in by_category.items()
         if categories.get(cat, {}).get("kind") == "discretionary"
     )
-    discretionary_pct = (discretionary_total / total * 100) if total else 0.0
+    # denominator is spend_total (excludes savings), not total — otherwise a
+    # big SIP payment inflates the base and understates your discretionary %
+    discretionary_pct = (discretionary_total / spend_total * 100) if spend_total else 0.0
 
     savings_total = sum(
         amount for cat, amount in by_category.items()
@@ -138,10 +141,10 @@ def build_insights(month):
             "status": "note",
         })
 
-    if m["total"]:
+    if m["spend_total"]:
         status = "good" if m["discretionary_pct"] <= 40 else "watch"
         bullets.append({
-            "text": f"Discretionary spend held at {m['discretionary_pct']:.0f}% of total.",
+            "text": f"Discretionary spend held at {m['discretionary_pct']:.0f}% of spend.",
             "status": status,
         })
 
