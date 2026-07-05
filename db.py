@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS investment_snapshots (
+  month TEXT PRIMARY KEY,   -- 'YYYY-MM'
+  value REAL NOT NULL,      -- total portfolio value as of this month (manually entered)
+  note  TEXT
+);
 """
 
 # columns that may be missing on a DB created by an earlier version of the app
@@ -164,14 +170,21 @@ def get_recent_transactions(limit=20):
         return [dict(r) for r in rows]
 
 
-def get_monthly_totals(months, kind=None):
+def get_monthly_totals(months, kind=None, category=None):
     """Returns [{month, total}] for the given list of 'YYYY-MM' strings.
     If kind is given, only sums transactions whose category has that kind
-    (e.g. kind='saving' for the savings trend)."""
+    (e.g. kind='saving' for the savings trend). If category is given, only
+    sums that one category (for the per-category drill-down)."""
     with get_conn() as conn:
         out = []
         for month in months:
-            if kind:
+            if category:
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions "
+                    "WHERE spent_on LIKE ? AND category = ?",
+                    (f"{month}%", category),
+                ).fetchone()
+            elif kind:
                 row = conn.execute(
                     "SELECT COALESCE(SUM(t.amount), 0) AS total FROM transactions t "
                     "JOIN categories c ON c.name = t.category "
@@ -185,6 +198,23 @@ def get_monthly_totals(months, kind=None):
                     (f"{month}%",),
                 ).fetchone()
             out.append({"month": month, "total": row["total"]})
+        return out
+
+
+def get_cumulative_savings_contributions(months):
+    """Returns [{month, contributed}] where contributed is the all-time
+    running total of kind='saving' transactions through the end of that
+    month (not just that month's own contribution)."""
+    with get_conn() as conn:
+        out = []
+        for month in months:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(t.amount), 0) AS total FROM transactions t "
+                "JOIN categories c ON c.name = t.category "
+                "WHERE c.kind = 'saving' AND t.spent_on <= ?",
+                (f"{month}-31",),
+            ).fetchone()
+            out.append({"month": month, "contributed": row["total"]})
         return out
 
 
@@ -298,4 +328,24 @@ def set_setting(key, value):
             "INSERT INTO settings (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
+        )
+
+
+# ---- investment snapshots (long-term portfolio tracking) -----------------
+
+def get_investment_snapshots():
+    """Returns {month: {value, note}} for every manually-entered snapshot."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT month, value, note FROM investment_snapshots ORDER BY month"
+        ).fetchall()
+        return {r["month"]: {"value": r["value"], "note": r["note"]} for r in rows}
+
+
+def set_investment_snapshot(month, value, note=None):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO investment_snapshots (month, value, note) VALUES (?, ?, ?) "
+            "ON CONFLICT(month) DO UPDATE SET value = excluded.value, note = excluded.note",
+            (month, value, note),
         )

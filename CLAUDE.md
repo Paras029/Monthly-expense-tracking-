@@ -113,6 +113,12 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 -- seed: monthly_salary=60000, credit_limit=0, currency='INR', timezone='Asia/Kolkata'
+
+CREATE TABLE IF NOT EXISTS investment_snapshots (
+  month TEXT PRIMARY KEY,   -- 'YYYY-MM'
+  value REAL NOT NULL,      -- total portfolio value as of this month (manually entered)
+  note  TEXT
+);
 ```
 
 **Default categories** (seed on first run; colors mirror the reference UI):
@@ -131,7 +137,18 @@ CREATE TABLE IF NOT EXISTS settings (
 `kind = 'saving'` categories still count fully against salary/credit like any other
 expense — they're money that actually left your account — but are *also* summed into
 the dedicated Savings & Investments chart on the dashboard, so contributions don't get
-lost among regular spending categories.
+lost among regular spending categories. They're **excluded** from the "where the money
+goes" donut, the Top category card, and the "largest single hit" insight, since those
+are about discretionary/essential spending habits, not SIP contributions — a big
+Investments transaction isn't a "hit" you'd want to cut. `compute_metrics()` exposes
+both `total` (all spend, including savings — used for salary/credit tracking) and
+`spend_total` (excludes `kind='saving'` — used for the donut/top-category/largest-hit).
+
+`investment_snapshots` powers **long-term investment tracking**: since there's no way
+to pull real brokerage/mutual-fund values, the user manually logs their total portfolio
+value once a month (via `/portfolio <amount>` or the dashboard). The dashboard then
+charts that against the automatically-computed cumulative sum of `kind='saving'`
+transactions ("contributed") — the gap between the two lines is gain or loss.
 
 Keyword→category aliases are seeded from `config.CATEGORY_KEYWORDS` into the `keywords`
 table on first run, then live entirely in the DB from that point on — editable from the
@@ -199,6 +216,7 @@ user id (the bot is public once created; this keeps strangers from injecting dat
 | `/insights`         | run + send the monthly insight bullets (see §9)               |
 | `/salary <amount>`  | set monthly salary (no arg = show current value)               |
 | `/credit <amount>`  | set credit limit (no arg = show current value)                 |
+| `/portfolio <amount>` | log this month's total investment/portfolio value (no arg = show current value) |
 
 ---
 
@@ -223,30 +241,43 @@ re-fetches all sections. Header: **"Personal Cashflow Ledger — where every rup
    per bullet (✓ good / ⚠ watch / → note).
 
 4. **Daily burn** — line chart: cumulative spend per day vs a straight dashed
-   even-pace budget line (`(salary+credit_limit)/days_in_month × day`).
+   even-pace reference line. A category dropdown (shared with §5's Month over month
+   chart) drills into a single category's cumulative burn instead of the whole month;
+   when filtered, the reference line uses that category's own `monthly_cap` (if any)
+   instead of salary+credit. The y-axis is scaled off the pace-*so-far*
+   (`budget_per_day × days_elapsed`), not the full month's target — otherwise the
+   reference line (which ends at the full monthly total) dwarfs the real spend line
+   early in the month and it looks empty.
 
 5. **Month over month + Savings & investments** — two bar charts side by side: total
-   outflow for the last 6 months (current month highlighted), and the same for
-   `kind='saving'` categories only, plus a "₹X saved this month" stat.
+   outflow for the last 6 months (current month highlighted, filterable by the same
+   category dropdown as §4), and the same for `kind='saving'` categories only, plus a
+   "₹X saved this month" stat.
 
-6. **Recurring & annual expenses** — list of `period='yearly'` transactions with an
+6. **Long-term investments** — line chart: cumulative `kind='saving'` contributions
+   (computed automatically) vs a manually-entered portfolio value per month (there's
+   no way to pull real brokerage/fund data, so the user logs it once a month via
+   `/portfolio <amount>` or a dashboard input). The gap between the two lines is the
+   gain or loss, shown as a stat (`₹X` and `%`) above the chart.
+
+7. **Recurring & annual expenses** — list of `period='yearly'` transactions with an
    annualised total. These still count fully against salary/credit above; this section
    just keeps cross-cutting costs (e.g. an annual gym membership) visible instead of
    buried in one month's activity.
 
-7. **Budgets & alerts** — per category with a `monthly_cap`: label + `spent / cap`
+8. **Budgets & alerts** — per category with a `monthly_cap`: label + `spent / cap`
    progress bar. Bar is normal color when under, **red when over cap**. Show a
    `WATCH` tag near the cap, `ON TRACK` when comfortably under.
 
-8. **Recent activity** — table: Date · Category (colored dot) · Note · Payment source
+9. **Recent activity** — table: Date · Category (colored dot) · Note · Payment source
    (💰 Salary / 💳 Credit) · Amount. Yearly-tagged rows get a small "yearly" badge next
    to the date. Subtitle: "Latest entries logged from Telegram." Most recent first.
 
-9. **🏷 Categories panel** (modal) — add/edit/delete categories (color, kind, monthly
-   cap) and their keyword aliases, backed by the `categories`/`keywords` tables via
-   `/api/categories`. No code editing required to add a category.
+10. **🏷 Categories panel** (modal) — add/edit/delete categories (color, kind, monthly
+    cap) and their keyword aliases, backed by the `categories`/`keywords` tables via
+    `/api/categories`. No code editing required to add a category.
 
-10. **⚙ Settings panel** (modal) — edit `monthly_salary` and `credit_limit` via
+11. **⚙ Settings panel** (modal) — edit `monthly_salary` and `credit_limit` via
     `/api/settings`. Also settable from Telegram with `/salary` and `/credit`.
 
 Chart.js and Tailwind load from a CDN; if either fails (e.g. flaky wifi), the affected
@@ -256,11 +287,13 @@ plain JSON, since none of that depends on the chart library being present.
 
 **API endpoints (`server.py`, all accept `?month=YYYY-MM`, default current):**
 ```
-GET  /api/summary                        -> cards + category breakdown + pace + insights inputs
+GET  /api/summary                        -> cards + category breakdown (excl. savings) + pace + insights inputs
 GET  /api/insights                       -> list of insight bullet strings + status
-GET  /api/daily-burn                     -> [{day, cumulative}], plus budget line params
-GET  /api/monthly                        -> last 6 months total outflow
+GET  /api/daily-burn                     -> [{day, cumulative}], plus reference-line params; ?category= to filter
+GET  /api/monthly                        -> last 6 months total outflow; ?category= to filter to one category
 GET  /api/savings                        -> last 6 months total for kind='saving' categories
+GET  /api/investments                    -> last N months' cumulative contributed vs manually-entered value + gain/loss
+POST /api/investments                    -> upsert {month, value, note} portfolio snapshot
 GET  /api/recurring                      -> period='yearly' transactions + annual total
 GET  /api/budgets                        -> [{category, cap, spent, status}]
 GET  /api/transactions                   -> recent rows for the activity table

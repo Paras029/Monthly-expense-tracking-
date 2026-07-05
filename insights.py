@@ -43,13 +43,24 @@ def compute_metrics(month):
         by_category.setdefault(t["category"], 0.0)
         by_category[t["category"]] += t["amount"]
 
+    # "spend" excludes kind='saving' categories (e.g. Investments) — money that
+    # left the account still counts fully against salary/credit above, but the
+    # "where the money goes" pie, top-category card, and "largest hit" insight
+    # are about discretionary/essential spending habits, not SIP contributions.
+    by_category_spend = {
+        cat: amount for cat, amount in by_category.items()
+        if categories.get(cat, {}).get("kind") != "saving"
+    }
+    spend_total = sum(by_category_spend.values())
+    spend_txns = [t for t in txns if categories.get(t["category"], {}).get("kind") != "saving"]
+
     top_category = None
     top_amount = 0.0
-    if by_category:
-        top_category, top_amount = max(by_category.items(), key=lambda kv: kv[1])
-    top_pct = (top_amount / total * 100) if total else 0.0
+    if by_category_spend:
+        top_category, top_amount = max(by_category_spend.items(), key=lambda kv: kv[1])
+    top_pct = (top_amount / spend_total * 100) if spend_total else 0.0
 
-    largest = max(txns, key=lambda t: t["amount"]) if txns else None
+    largest = max(spend_txns, key=lambda t: t["amount"]) if spend_txns else None
 
     discretionary_total = sum(
         amount for cat, amount in by_category.items()
@@ -64,6 +75,7 @@ def compute_metrics(month):
 
     return {
         "total": total,
+        "spend_total": spend_total,
         "monthly_salary": monthly_salary,
         "credit_limit": credit_limit,
         "salary_used": salary_used,
@@ -75,6 +87,7 @@ def compute_metrics(month):
         "days_total": days_total,
         "projected": projected,
         "by_category": by_category,
+        "by_category_spend": by_category_spend,
         "top_category": top_category,
         "top_amount": top_amount,
         "top_pct": top_pct,

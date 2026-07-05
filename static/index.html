@@ -108,14 +108,19 @@
 
   <!-- Daily burn -->
   <section class="card p-4">
-    <h2 class="font-medium mb-3">Daily burn</h2>
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="font-medium">Daily burn</h2>
+      <select id="category-filter" class="text-xs px-2 py-1">
+        <option value="">All categories</option>
+      </select>
+    </div>
     <div class="h-64"><canvas id="burn-chart"></canvas></div>
   </section>
 
   <!-- Month over month + Savings -->
   <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
     <div class="card p-4">
-      <h2 class="font-medium mb-3">Month over month</h2>
+      <h2 id="monthly-title" class="font-medium mb-3">Month over month</h2>
       <div class="h-56"><canvas id="monthly-chart"></canvas></div>
     </div>
     <div class="card p-4">
@@ -123,6 +128,20 @@
       <p id="savings-total-sub" class="text-xs text-muted mb-2">₹0 saved this month</p>
       <div class="h-56"><canvas id="savings-chart"></canvas></div>
     </div>
+  </section>
+
+  <!-- Long-term investments -->
+  <section class="card p-4">
+    <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+      <h2 class="font-medium">Long-term investments</h2>
+      <div class="flex items-center gap-2">
+        <input id="portfolio-value-input" type="number" placeholder="Update this month's value" class="text-xs px-2 py-1.5 w-44" />
+        <button id="save-portfolio-value" class="text-xs bg-amber-500 hover:bg-amber-400 text-black font-medium rounded px-3 py-1.5">Save</button>
+      </div>
+    </div>
+    <p id="investments-stat" class="text-xs text-muted mb-2"></p>
+    <p class="text-xs text-muted mb-3">"Contributed" is computed automatically from your Investments-category spend. "Portfolio value" is whatever you tell it once a month — the gap is your gain or loss.</p>
+    <div class="h-56"><canvas id="investments-chart"></canvas></div>
   </section>
 
   <!-- Recurring & annual expenses -->
@@ -245,7 +264,8 @@ if (chartsAvailable()) {
   Chart.defaults.plugins.tooltip.displayColors = false;
 }
 
-let donutChart, burnChart, monthlyChart, savingsChart;
+let donutChart, burnChart, monthlyChart, savingsChart, investmentsChart;
+let selectedCategory = '';
 
 async function fetchJSON(path, params) {
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -282,7 +302,7 @@ async function loadSummary(month) {
   document.getElementById('card-proj').textContent = fmtINR(s.projected);
   document.getElementById('card-proj-sub').textContent = `${fmtINR(s.pace_per_day)}/day pace`;
 
-  document.getElementById('donut-total').textContent = fmtINR(s.spent);
+  document.getElementById('donut-total').textContent = fmtINR(s.spend_total);
 
   const labels = s.breakdown.map(b => b.category);
   const data = s.breakdown.map(b => b.amount);
@@ -295,6 +315,7 @@ async function loadSummary(month) {
       data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: '#171a23', borderWidth: 2, hoverOffset: 10, hoverBorderColor: '#171a23' }] },
       options: {
         cutout: '70%',
+        maintainAspectRatio: false,
         animation: { animateRotate: true, duration: 500 },
         plugins: {
           legend: { display: false },
@@ -331,11 +352,12 @@ async function loadInsights(month) {
   `).join('') || '<li class="text-muted">Not enough data yet for insights.</li>';
 }
 
-async function loadDailyBurn(month) {
-  const d = await fetchJSON('/api/daily-burn', { month });
+async function loadDailyBurn(month, category) {
+  const d = await fetchJSON('/api/daily-burn', category ? { month, category } : { month });
   const labels = d.series.map(p => p.day);
   const cumulative = d.series.map(p => p.cumulative);
-  const budgetLine = d.series.map(p => d.budget_per_day * p.day);
+  const hasPaceLine = d.budget_per_day !== null && d.budget_per_day !== undefined;
+  const budgetLine = hasPaceLine ? d.series.map(p => d.budget_per_day * p.day) : null;
 
   if (!chartsAvailable()) { noChartFallback('burn-chart'); return; }
   if (burnChart) burnChart.destroy();
@@ -345,38 +367,51 @@ async function loadDailyBurn(month) {
   gradient.addColorStop(0, 'rgba(245,158,11,0.28)');
   gradient.addColorStop(1, 'rgba(245,158,11,0.02)');
 
+  // Scale the y-axis off the pace *so far*, not the full month's target —
+  // otherwise the dashed reference line (which ends at the full monthly
+  // salary+credit total) dwarfs the real spend line early in the month and
+  // it looks like nothing is plotted.
+  const today = new Date();
+  const isCurrentMonth = month === (today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0'));
+  const daysElapsed = isCurrentMonth ? today.getDate() : labels.length;
+  const paceSoFar = hasPaceLine ? d.budget_per_day * daysElapsed : 0;
+  const maxSoFar = Math.max(...cumulative, paceSoFar, 1);
+  const yMax = maxSoFar * 1.3;
+
+  const datasets = [
+    {
+      label: category ? `${category} spend` : 'Cumulative spend',
+      data: cumulative,
+      borderColor: '#f59e0b',
+      backgroundColor: gradient,
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      pointHoverRadius: 5,
+      pointHoverBackgroundColor: '#f59e0b',
+      pointHoverBorderColor: '#171a23',
+      pointHoverBorderWidth: 2,
+      borderWidth: 2.5,
+    },
+  ];
+  if (hasPaceLine) {
+    datasets.push({
+      label: category ? `${category} cap pace` : 'Even-pace budget',
+      data: budgetLine,
+      borderColor: '#64748b',
+      borderDash: [6, 4],
+      pointRadius: 0,
+      pointHoverRadius: 0,
+      borderWidth: 1.5,
+      fill: false,
+    });
+  }
+
   burnChart = new Chart(canvas, {
     type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Cumulative spend',
-          data: cumulative,
-          borderColor: '#f59e0b',
-          backgroundColor: gradient,
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          pointHoverRadius: 5,
-          pointHoverBackgroundColor: '#f59e0b',
-          pointHoverBorderColor: '#171a23',
-          pointHoverBorderWidth: 2,
-          borderWidth: 2.5,
-        },
-        {
-          label: 'Even-pace budget',
-          data: budgetLine,
-          borderColor: '#64748b',
-          borderDash: [6, 4],
-          pointRadius: 0,
-          pointHoverRadius: 0,
-          borderWidth: 1.5,
-          fill: false,
-        },
-      ],
-    },
+    data: { labels, datasets },
     options: {
+      maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { labels: { color: '#8b8fa3', usePointStyle: true, boxWidth: 8 } },
@@ -389,19 +424,21 @@ async function loadDailyBurn(month) {
       },
       scales: {
         x: { grid: { color: '#1e2129', display: false }, ticks: { color: '#8b8fa3' } },
-        y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+        y: { grid: { color: '#1e2129' }, max: yMax, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
       },
     },
   });
 }
 
-async function loadMonthly(month) {
-  const d = await fetchJSON('/api/monthly', { month });
+async function loadMonthly(month, category) {
+  const d = await fetchJSON('/api/monthly', category ? { month, category } : { month });
   const labels = d.months.map(m => m.month);
   const totals = d.months.map(m => m.total);
   const current = month;
   const colors = d.months.map(m => (m.month === current ? '#f59e0b' : '#3b3f4d'));
   const hoverColors = d.months.map(m => (m.month === current ? '#fbbf24' : '#4b5163'));
+
+  document.getElementById('monthly-title').textContent = category ? `Month over month — ${category}` : 'Month over month';
 
   if (!chartsAvailable()) { noChartFallback('monthly-chart'); return; }
   if (monthlyChart) monthlyChart.destroy();
@@ -409,6 +446,7 @@ async function loadMonthly(month) {
     type: 'bar',
     data: { labels, datasets: [{ data: totals, backgroundColor: colors, hoverBackgroundColor: hoverColors, borderRadius: 4, maxBarThickness: 40 }] },
     options: {
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         tooltip: { callbacks: { label: (ctx) => fmtINR(ctx.raw) } },
@@ -438,9 +476,72 @@ async function loadSavings(month) {
     type: 'bar',
     data: { labels, datasets: [{ data: totals, backgroundColor: colors, hoverBackgroundColor: hoverColors, borderRadius: 4, maxBarThickness: 40 }] },
     options: {
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         tooltip: { callbacks: { label: (ctx) => fmtINR(ctx.raw) } },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
+        y: { grid: { color: '#1e2129' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+      },
+    },
+  });
+}
+
+async function loadInvestments(month) {
+  const d = await fetchJSON('/api/investments', { month, n: 12 });
+  const labels = d.months.map(m => m.month);
+  const contributed = d.months.map(m => m.contributed);
+  const value = d.months.map(m => m.value);
+
+  const statEl = document.getElementById('investments-stat');
+  if (d.latest_value !== null && d.latest_value !== undefined) {
+    const sign = d.gain >= 0 ? '+' : '−';
+    const gainColor = d.gain >= 0 ? 'text-emerald-400' : 'text-red-400';
+    statEl.innerHTML = `Value ${fmtINR(d.latest_value)} vs ${fmtINR(d.latest_contributed)} contributed — ` +
+      `<span class="${gainColor}">${sign}${fmtINR(Math.abs(d.gain))} (${d.gain_pct.toFixed(1)}%)</span>`;
+  } else {
+    statEl.textContent = `${fmtINR(d.latest_contributed)} contributed so far — log a portfolio value to track gains/losses.`;
+  }
+
+  if (!chartsAvailable()) { noChartFallback('investments-chart'); return; }
+  if (investmentsChart) investmentsChart.destroy();
+  investmentsChart = new Chart(document.getElementById('investments-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Contributed',
+          data: contributed,
+          borderColor: '#eab308',
+          backgroundColor: 'rgba(234,179,8,0.08)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 0,
+          borderWidth: 2,
+        },
+        {
+          label: 'Portfolio value',
+          data: value,
+          borderColor: '#22c55e',
+          backgroundColor: 'transparent',
+          spanGaps: true,
+          tension: 0.25,
+          pointRadius: 3,
+          pointBackgroundColor: '#22c55e',
+          pointHoverRadius: 5,
+          borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#8b8fa3', usePointStyle: true, boxWidth: 8 } },
+        tooltip: { callbacks: { label: (ctx) => ctx.raw == null ? null : `${ctx.dataset.label}: ${fmtINR(ctx.raw)}` } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
@@ -508,18 +609,16 @@ async function loadBudgets(month) {
   `).join('');
 }
 
-async function loadTransactions(month, summary) {
+async function loadTransactions(month) {
   const d = await fetchJSON('/api/transactions', { month });
   const body = document.getElementById('transactions-body');
-  const categories = {};
-  summary.breakdown.forEach(b => categories[b.category] = b.color);
 
   body.innerHTML = d.transactions.map(t => `
     <tr class="border-b border-[#1e2129]">
       <td class="py-2 pr-4 text-muted">${t.spent_on}${t.period === 'yearly' ? ' <span class=\"text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300\">yearly</span>' : ''}</td>
       <td class="py-2 pr-4">
         <span class="flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full inline-block" style="background:${categories[t.category] || '#64748b'}"></span>
+          <span class="w-2 h-2 rounded-full inline-block" style="background:${categoryColorMap[t.category] || '#64748b'}"></span>
           ${t.category}
         </span>
       </td>
@@ -530,22 +629,59 @@ async function loadTransactions(month, summary) {
   `).join('') || `<tr><td colspan="5" class="py-4 text-center text-muted">No transactions yet.</td></tr>`;
 }
 
+let categoryColorMap = {};
+
+async function loadCategoryMeta() {
+  const d = await fetchJSON('/api/categories');
+  categoryColorMap = {};
+  d.categories.forEach(c => categoryColorMap[c.name] = c.color);
+
+  const select = document.getElementById('category-filter');
+  const previousValue = select.value;
+  select.innerHTML = '<option value="">All categories</option>' +
+    d.categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+  select.value = previousValue;
+}
+
 async function loadAll() {
   const month = monthPicker.value || currentMonthStr();
-  const summary = await loadSummary(month).catch((e) => { console.error(e); return { breakdown: [] }; });
+  await loadCategoryMeta().catch((e) => console.error(e));
+  await loadSummary(month).catch((e) => console.error(e));
   await Promise.allSettled([
     loadInsights(month),
-    loadDailyBurn(month),
-    loadMonthly(month),
+    loadDailyBurn(month, selectedCategory),
+    loadMonthly(month, selectedCategory),
     loadSavings(month),
+    loadInvestments(month),
     loadRecurring(),
     loadBudgets(month),
-    loadTransactions(month, summary),
+    loadTransactions(month),
   ]);
 }
 
 monthPicker.addEventListener('change', loadAll);
 loadAll();
+
+document.getElementById('category-filter').addEventListener('change', (e) => {
+  selectedCategory = e.target.value;
+  const month = monthPicker.value || currentMonthStr();
+  loadDailyBurn(month, selectedCategory);
+  loadMonthly(month, selectedCategory);
+});
+
+document.getElementById('save-portfolio-value').addEventListener('click', async () => {
+  const input = document.getElementById('portfolio-value-input');
+  const val = parseFloat(input.value);
+  if (isNaN(val)) return;
+  const month = monthPicker.value || currentMonthStr();
+  await fetch('/api/investments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month, value: val }),
+  });
+  input.value = '';
+  loadInvestments(month);
+});
 
 // ---- Settings modal ----------------------------------------------------
 

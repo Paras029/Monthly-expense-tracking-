@@ -37,15 +37,18 @@ def api_summary(month: str = Query(default=None)):
     m = insights.compute_metrics(month)
     categories = {c["name"]: c for c in db.get_categories()}
 
+    # breakdown feeds the "where the money goes" donut — it excludes
+    # kind='saving' categories (e.g. Investments) so contributions don't
+    # dominate a chart about spending habits; they get their own Savings chart.
     breakdown = [
         {
             "category": cat,
             "amount": amount,
-            "pct": (amount / m["total"] * 100) if m["total"] else 0,
+            "pct": (amount / m["spend_total"] * 100) if m["spend_total"] else 0,
             "color": categories.get(cat, {}).get("color", "#64748b"),
             "kind": categories.get(cat, {}).get("kind", "discretionary"),
         }
-        for cat, amount in sorted(m["by_category"].items(), key=lambda kv: -kv[1])
+        for cat, amount in sorted(m["by_category_spend"].items(), key=lambda kv: -kv[1])
     ]
 
     days_left = max(m["days_total"] - m["days_elapsed"], 0)
@@ -56,6 +59,7 @@ def api_summary(month: str = Query(default=None)):
     return {
         "month": month,
         "spent": m["total"],
+        "spend_total": m["spend_total"],
         "projected": m["projected"],
         "pace_per_day": pace_per_day,
         "days_left": days_left,
@@ -83,9 +87,11 @@ def api_insights(month: str = Query(default=None)):
 
 
 @app.get("/api/daily-burn")
-def api_daily_burn(month: str = Query(default=None)):
+def api_daily_burn(month: str = Query(default=None), category: str = Query(default=None)):
     month = month or _current_month()
     txns = db.get_transactions_for_month(month)
+    if category:
+        txns = [t for t in txns if t["category"] == category]
     m = insights.compute_metrics(month)
 
     daily_totals = {}
@@ -99,21 +105,31 @@ def api_daily_burn(month: str = Query(default=None)):
         running += daily_totals.get(day, 0.0)
         cumulative.append({"day": day, "cumulative": running})
 
-    per_day_budget = (m["budget"] / m["days_total"]) if m["days_total"] else 0.0
+    if category:
+        # a single category has no salary/credit-wide target — fall back to
+        # its own monthly cap (if one is set) as the pace reference instead.
+        cat_row = next((c for c in db.get_categories() if c["name"] == category), None)
+        cap = cat_row["monthly_cap"] if cat_row else None
+        per_day_budget = (cap / m["days_total"]) if cap and m["days_total"] else None
+        budget = cap
+    else:
+        per_day_budget = (m["budget"] / m["days_total"]) if m["days_total"] else 0.0
+        budget = m["budget"]
 
     return {
         "month": month,
+        "category": category,
         "series": cumulative,
         "budget_per_day": per_day_budget,
-        "budget": m["budget"],
+        "budget": budget,
     }
 
 
 @app.get("/api/monthly")
-def api_monthly(month: str = Query(default=None)):
+def api_monthly(month: str = Query(default=None), category: str = Query(default=None)):
     month = month or _current_month()
     months = _last_n_months(6, month)
-    return {"months": db.get_monthly_totals(months)}
+    return {"months": db.get_monthly_totals(months, category=category)}
 
 
 @app.get("/api/savings")
@@ -128,6 +144,53 @@ def api_recurring():
     txns = db.get_recurring_transactions()
     total = sum(t["amount"] for t in txns)
     return {"transactions": txns, "total": total}
+
+
+@app.get("/api/investments")
+def api_investments(month: str = Query(default=None), n: int = Query(default=12)):
+    """Long-term investment tracking: cumulative SIP/stocks/etc contributions
+    (computed automatically from kind='saving' transactions) vs the actual
+    portfolio value (manually entered, since we can't fetch real market data)."""
+    month = month or _current_month()
+    months = _last_n_months(n, month)
+    contributed_by_month = {
+        c["month"]: c["contributed"] for c in db.get_cumulative_savings_contributions(months)
+    }
+    snapshots = db.get_investment_snapshots()
+
+    out = [
+        {
+            "month": m,
+            "contributed": contributed_by_month.get(m, 0.0),
+            "value": snapshots.get(m, {}).get("value"),
+        }
+        for m in months
+    ]
+
+    latest_value = next((row["value"] for row in reversed(out) if row["value"] is not None), None)
+    latest_contributed = out[-1]["contributed"] if out else 0.0
+    gain = (latest_value - latest_contributed) if latest_value is not None else None
+    gain_pct = (gain / latest_contributed * 100) if gain is not None and latest_contributed else None
+
+    return {
+        "months": out,
+        "latest_value": latest_value,
+        "latest_contributed": latest_contributed,
+        "gain": gain,
+        "gain_pct": gain_pct,
+    }
+
+
+class InvestmentSnapshotIn(BaseModel):
+    month: str
+    value: float
+    note: Optional[str] = None
+
+
+@app.post("/api/investments")
+def api_add_investment_snapshot(body: InvestmentSnapshotIn):
+    db.set_investment_snapshot(body.month, body.value, body.note)
+    return {"ok": True}
 
 
 @app.get("/api/budgets")

@@ -81,7 +81,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/month — this month vs salary & credit\n"
         "/insights — monthly insight bullets\n"
         "/salary <amount> — set your monthly salary\n"
-        "/credit <amount> — set your credit limit"
+        "/credit <amount> — set your credit limit\n"
+        "/portfolio <amount> — log this month's total investment value "
+        "(for gain/loss tracking vs what you've contributed)"
     )
 
 
@@ -190,6 +192,35 @@ async def cmd_credit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Credit limit set to {_fmt_amount(amount)}.")
 
 
+async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    from datetime import date
+
+    month = date.today().strftime("%Y-%m")
+    if not context.args:
+        snapshots = db.get_investment_snapshots()
+        current = snapshots.get(month)
+        if current:
+            await update.message.reply_text(
+                f"Portfolio value for {month} is {_fmt_amount(current['value'])}. Usage: /portfolio <amount>"
+            )
+        else:
+            await update.message.reply_text(
+                "No portfolio value logged for this month yet. Usage: /portfolio <amount>\n"
+                "This is your total investment/portfolio value right now (contributions + returns), "
+                "logged once a month — used to track gains/losses vs what you've actually put in."
+            )
+        return
+    try:
+        amount = float(context.args[0].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("Usage: /portfolio <amount>, e.g. /portfolio 150000")
+        return
+    db.set_investment_snapshot(month, amount)
+    await update.message.reply_text(f"Portfolio value for {month} set to {_fmt_amount(amount)}.")
+
+
 async def cmd_insights(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_allowed(update):
         return
@@ -216,6 +247,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("insights", cmd_insights))
     app.add_handler(CommandHandler("salary", cmd_salary))
     app.add_handler(CommandHandler("credit", cmd_credit))
+    app.add_handler(CommandHandler("portfolio", cmd_portfolio))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     return app
