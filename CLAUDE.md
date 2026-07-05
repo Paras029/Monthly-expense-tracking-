@@ -104,10 +104,15 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 CREATE TABLE IF NOT EXISTS categories (
-  name         TEXT PRIMARY KEY,
-  color        TEXT NOT NULL,         -- hex, used by charts
-  kind         TEXT NOT NULL,         -- 'essential' | 'discretionary' | 'saving' | 'liquid'
-  monthly_cap  REAL                   -- budget for Budgets & Alerts (nullable)
+  name            TEXT PRIMARY KEY,
+  color           TEXT NOT NULL,         -- hex, used by charts
+  kind            TEXT NOT NULL,         -- 'essential' | 'discretionary' | 'saving' | 'liquid'
+  monthly_cap     REAL,                  -- budget for Budgets & Alerts (nullable)
+  parent_category TEXT REFERENCES categories(name),  -- nests a kind='saving' vehicle (SIP,
+                                          -- a gold plan) under another, e.g. 'Investments' —
+                                          -- organizational only, doesn't change its own kind/keywords/transactions
+  target_amount   REAL,                  -- optional savings/investment goal for this category
+  target_date     TEXT                   -- optional 'YYYY-MM-DD' goal date
 );
 
 CREATE TABLE IF NOT EXISTS keywords (
@@ -167,7 +172,37 @@ tracked independently (its own cumulative contribution, its own value history, i
 that shouldn't be conflated into one blended number. The dashboard also shows a combined
 trend: cumulative contributed vs. summed value across vehicles, forward-filling each
 vehicle's last known value between updates (`GET /api/investments`) — the gap is gain
-or loss.
+or loss. The dashboard's `#vehicle-chart-select` dropdown re-points the same chart at a
+single vehicle's own `months` series instead of the combined one.
+
+A vehicle's **gain is incremental, never since-inception**: the app can't distinguish
+principal from interest inside a manually-entered value, so comparing a fresh value
+against all-time contributed fabricates a huge "gain" the moment a vehicle has any
+pre-existing balance the app never logged. `_vehicle_gain()` in `server.py` instead
+computes `gain = new_value − (previous_snapshot_value + contributions_since_that_snapshot)`
+— the real change since the *last* time this vehicle was valued, not since it was
+created. A vehicle's first-ever snapshot has no previous to diff against, so `gain`/
+`gain_pct` are `None` (a baseline, not a "gain") — the UI shows "first recorded value —
+gain shows from next update" instead of fabricating a percentage. The combined
+`total_gain_pct` divides by the *summed baselines* of vehicles with a known gain, not
+by `total_contributed`, so it stays on the same scale as each vehicle's own `gain_pct`.
+
+A vehicle can optionally nest under another `kind='saving'` category via
+`parent_category` (e.g. a "Gold Reserve Plan" vehicle nested under "Investments") —
+purely organizational, shown as an indented row in both the Categories panel and the
+vehicle list; it doesn't affect that vehicle's own contribution/value/gain tracking,
+which stays fully independent. A vehicle can also carry an optional `target_amount` /
+`target_date` (set when adding it, or edited later via 🏷 Categories) — the vehicle list
+shows a progress bar (`target_progress_pct` = effective value ÷ target, capped at 999%)
+and the target date underneath.
+
+Both the top **Savings** card and the Long-term investments total use the same
+"effective value" (`_savings_effective_balance()` in `server.py`): for each vehicle, the
+manually-set value as of the selected month if one exists, else cumulative-contributed
+as a floor estimate — so setting a vehicle's value immediately moves the top card too,
+and the two never disagree. Both this and the **Liquid fund** balance
+(`db.get_cumulative_balance_by_kind`) are all-time cumulative sums through the selected
+month, so they carry forward automatically month to month rather than resetting.
 
 Keyword→category aliases are seeded from `config.CATEGORY_KEYWORDS` into the `keywords`
 table on first run, then live entirely in the DB from that point on — editable from the
@@ -293,7 +328,13 @@ unreachable, a pure-CSS fallback with no JS failure mode (unlike Chart.js/Tailwi
 2. **Where the money goes** — donut chart (Chart.js), total in center, legend list of
    categories with amount + %, plus *Top category* and *Projected month-end* as inline
    stats below the legend (moved here from the old top-card row — they're about
-   spending patterns, which this section already covers).
+   spending patterns, which this section already covers). A pill-button toggle above
+   the chart re-slices the same month by **All spend** (default — excludes
+   saving/liquid, the usual spend-pattern view), **Salary**, **Credit** (by
+   `payment_source`), **Savings**, or **Liquid fund** (by `kind`) — `GET
+   /api/summary?view=` returns a `breakdown`/`view_total` scoped to whichever slice is
+   selected, so percentages are always against that slice's own total, not the whole
+   month's spend.
 
 3. **Spending insights** — bullet list from `insights.py` (see §9). Small status icon
    per bullet (✓ good / ⚠ watch / → note).
@@ -371,7 +412,7 @@ plain JSON, since none of that depends on the chart library being present.
 
 **API endpoints (`server.py`, all accept `?month=YYYY-MM`, default current):**
 ```
-GET  /api/summary                        -> cards (incl. savings/liquid balances) + category breakdown (excl. saving/liquid) + pace + insights inputs
+GET  /api/summary                        -> cards (incl. savings/liquid balances) + category breakdown + pace + insights inputs; ?view=all|salary|credit|saving|liquid re-slices the breakdown
 GET  /api/insights                       -> list of insight bullet strings + status
 GET  /api/recap                          -> cached AI daily recap {lines, source, generated_at}
 POST /api/recap/refresh                  -> force-regenerate today's recap (bypasses cache)
@@ -386,8 +427,8 @@ GET  /api/transactions                   -> recent rows for the activity table
 PUT  /api/transactions/{id}              -> edit any field of a logged transaction
 DEL  /api/transactions/{id}              -> delete a logged transaction
 GET  /api/categories                     -> categories with their keyword lists
-POST /api/categories                     -> add a category
-PUT  /api/categories/{name}              -> update color/kind/cap
+POST /api/categories                     -> add a category (incl. optional parent_category/target_amount/target_date)
+PUT  /api/categories/{name}              -> update color/kind/cap/parent_category/target_amount/target_date
 DEL  /api/categories/{name}              -> delete (reassigns its transactions to Other)
 POST /api/categories/{name}/keywords     -> add a keyword alias
 DEL  /api/categories/{name}/keywords/{k} -> remove a keyword alias
@@ -404,6 +445,14 @@ Compute the **metrics with plain Python** (deterministic, free, no Gemini call h
 all) and phrase them with string templates. `discretionary_pct` divides by `spend_total`
 (excludes `NON_SPEND_KINDS = {'saving', 'liquid'}`), not `total` — otherwise a big SIP
 payment or a liquid-fund transfer inflates the base and understates the real ratio.
+
+`projected` (and the dashboard's `pace_per_day`) only pace the **variable** portion of
+spend across the month — `fixed_total + savings_total + liquid_total +
+(variable_total ÷ days_elapsed × days_total)`. Fixed costs, a SIP contribution, and a
+liquid-fund transfer are lump sums already logged in full for the month; they don't
+recur again before month-end, so extrapolating them by days-elapsed would fabricate a
+spike (e.g. rent paid in full on day 1 previously projected the whole month at a
+₹21,500/day pace). Only the actual day-to-day variable spend is paced forward.
 
 **Metrics to compute** (mirror the reference insights):
 - On-pace check: projected month-end vs (salary + credit_limit) → "On pace for ₹X,

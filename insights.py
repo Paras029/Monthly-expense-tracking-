@@ -37,7 +37,6 @@ def compute_metrics(month):
 
     days_elapsed = _days_elapsed(month)
     days_total = _days_in_month(month)
-    projected = (total / days_elapsed * days_total) if days_elapsed else 0.0
 
     by_category = {}
     for t in txns:
@@ -101,6 +100,14 @@ def compute_metrics(month):
         amount for cat, amount in by_category.items()
         if categories.get(cat, {}).get("kind") == "liquid"
     )
+
+    # Fixed costs (rent, subscriptions, a SIP), savings and liquid contributions are
+    # lump sums already logged in full for the month — they don't recur again before
+    # month-end, so pacing them by days-elapsed would fabricate a spike (e.g. rent
+    # paid on day 1 alone would look like ₹21,500/day for the rest of the month).
+    # Only variable_total (actual discretionary/essential day-to-day spend) is paced.
+    variable_pace = (variable_total / days_elapsed * days_total) if days_elapsed else 0.0
+    projected = fixed_total + savings_total + liquid_total + variable_pace
 
     return {
         "total": total,

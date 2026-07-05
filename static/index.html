@@ -70,6 +70,9 @@
   .row-hover:hover { background: rgba(255,255,255,0.02); }
   .navpill { white-space: nowrap; font-size: 0.78rem; padding: 0.35rem 0.8rem; border-radius: 999px; color: #8b8fa3; border: 1px solid transparent; }
   .navpill:hover { color: #e7e8ee; border-color: #262a38; }
+  .view-pill { background: #0c0e14; border: 1px solid #262a38; color: #8b8fa3; transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease; }
+  .view-pill:hover { color: #e7e8ee; }
+  .view-pill.active { background: #f59e0b; border-color: #f59e0b; color: #0c0e14; font-weight: 600; }
   .btn-primary { background: #f59e0b; color: #0c0e14; font-weight: 600; }
   .btn-primary:hover { background: #fbbf24; }
   .btn-primary:disabled { opacity: 0.6; }
@@ -137,12 +140,21 @@
 
   <!-- Where the money goes -->
   <section id="sec-spending" class="card p-4 sm:p-5">
-    <h2 class="font-display text-lg mb-4">Where the money goes</h2>
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <h2 class="font-display text-lg">Where the money goes</h2>
+      <div id="spend-view-toggle" class="flex gap-1 flex-wrap text-xs">
+        <button data-view="all" class="view-pill px-2.5 py-1 rounded-full">All spend</button>
+        <button data-view="salary" class="view-pill px-2.5 py-1 rounded-full">💰 Salary</button>
+        <button data-view="credit" class="view-pill px-2.5 py-1 rounded-full">💳 Credit</button>
+        <button data-view="saving" class="view-pill px-2.5 py-1 rounded-full">📈 Savings</button>
+        <button data-view="liquid" class="view-pill px-2.5 py-1 rounded-full">💧 Liquid fund</button>
+      </div>
+    </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-5 items-center">
       <div class="relative h-64">
         <canvas id="donut-chart"></canvas>
         <div id="donut-center" class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span class="text-xs text-muted">Total</span>
+          <span id="donut-label" class="text-xs text-muted">Total</span>
           <span id="donut-total" class="text-lg font-display tnum">₹0</span>
         </div>
       </div>
@@ -211,6 +223,11 @@
       <button id="open-add-vehicle" class="text-xs icon-btn card px-2 py-1">+ Add investment</button>
     </div>
     <p id="investments-stat" class="text-sm mb-3 tnum"></p>
+    <div class="flex items-center justify-between mb-2">
+      <select id="vehicle-chart-select" class="text-xs px-2 py-1.5">
+        <option value="">Combined (all vehicles)</option>
+      </select>
+    </div>
     <div class="h-52 mb-5"><canvas id="investments-chart"></canvas></div>
 
     <p class="text-[11px] text-muted uppercase tracking-wider mb-2">Vehicles</p>
@@ -318,7 +335,16 @@
     <label class="block text-xs text-muted mb-1">Name</label>
     <input id="vehicle-name" type="text" placeholder="e.g. Gold Plan" class="w-full px-3 py-2 text-sm mb-3" />
     <label class="block text-xs text-muted mb-1">Color</label>
-    <input id="vehicle-color" type="color" value="#34d399" class="h-9 w-12 p-0.5 mb-4" />
+    <input id="vehicle-color" type="color" value="#34d399" class="h-9 w-12 p-0.5 mb-3" />
+    <label class="block text-xs text-muted mb-1">Sub-category of (optional)</label>
+    <select id="vehicle-parent" class="w-full px-3 py-2 text-sm mb-3">
+      <option value="">— none, top-level —</option>
+    </select>
+    <p class="text-[11px] text-muted uppercase tracking-wider mb-2 mt-1">Target (optional)</p>
+    <label class="block text-xs text-muted mb-1">Target amount (₹)</label>
+    <input id="vehicle-target-amount" type="number" placeholder="e.g. 500000" class="w-full px-3 py-2 text-sm mb-3" />
+    <label class="block text-xs text-muted mb-1">Target date</label>
+    <input id="vehicle-target-date" type="date" class="w-full px-3 py-2 text-sm mb-4" />
     <button id="save-vehicle" class="w-full btn-primary text-sm rounded-lg py-2">Add vehicle</button>
   </div>
 </div>
@@ -405,8 +431,11 @@ if (chartsAvailable()) {
 
 let donutChart, burnChart, monthlyChart, savingsChart, investmentsChart;
 let selectedCategory = '';
+let selectedSpendView = 'all';
 let categoryColorMap = {};
 let categoriesCache = [];
+
+const VIEW_LABELS = { all: 'Total', salary: 'From salary', credit: 'From credit', saving: 'Savings', liquid: 'Liquid fund' };
 
 async function fetchJSON(path, params) {
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -432,8 +461,9 @@ function recurrenceBadge(recurrence) {
   return '';
 }
 
-async function loadSummary(month) {
-  const s = await fetchJSON('/api/summary', { month });
+async function loadSummary(month, view) {
+  view = view || selectedSpendView;
+  const s = await fetchJSON('/api/summary', { month, view });
 
   document.getElementById('card-salary').textContent = fmtINR(s.salary_used);
   document.getElementById('card-salary-sub').textContent = `${s.salary_pct_used.toFixed(0)}% of ${fmtINR(s.monthly_salary)} used`;
@@ -459,7 +489,11 @@ async function loadSummary(month) {
   document.getElementById('card-proj').textContent = fmtINR(s.projected);
   document.getElementById('card-proj-sub').textContent = `${fmtINR(s.pace_per_day)}/day pace`;
 
-  document.getElementById('donut-total').textContent = fmtINR(s.spend_total);
+  document.getElementById('donut-total').textContent = fmtINR(s.view_total);
+  document.getElementById('donut-label').textContent = VIEW_LABELS[s.view] || 'Total';
+  document.querySelectorAll('#spend-view-toggle .view-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === s.view);
+  });
 
   const labels = s.breakdown.map(b => b.category);
   const data = s.breakdown.map(b => b.amount);
@@ -493,7 +527,7 @@ async function loadSummary(month) {
       </span>
       <span class="text-muted tnum">${fmtINR(b.amount)} · ${b.pct.toFixed(0)}%</span>
     </li>
-  `).join('') || '<li class="text-muted">No spend logged yet.</li>';
+  `).join('') || '<li class="text-muted">Nothing logged for this view yet.</li>';
 
   return s;
 }
@@ -668,68 +702,93 @@ function daysAgoLabel(days) {
   return `updated ${days}d ago`;
 }
 
-async function loadInvestments(month) {
-  const d = await fetchJSON('/api/investments', { month, n: 12 });
-  const labels = d.combined_months.map(m => m.month);
-  const contributed = d.combined_months.map(m => m.contributed);
-  const value = d.combined_months.map(m => m.value);
+let investmentsCache = null;
+let selectedVehicleChart = '';
 
-  const statEl = document.getElementById('investments-stat');
-  if (d.total_value !== null && d.total_value !== undefined) {
-    const sign = d.total_gain >= 0 ? '+' : '−';
-    const gainColor = d.total_gain >= 0 ? 'text-emerald-400' : 'text-red-400';
-    statEl.innerHTML = `Value ${fmtINR(d.total_value)} vs ${fmtINR(d.total_contributed)} contributed — ` +
-      `<span class="${gainColor}">${sign}${fmtINR(Math.abs(d.total_gain))} (${d.total_gain_pct.toFixed(1)}%)</span>`;
+function renderInvestmentsChart(d, vehicleCategory) {
+  let labels, contributed, value;
+  if (vehicleCategory) {
+    const v = d.vehicles.find(x => x.category === vehicleCategory);
+    labels = v ? v.months.map(m => m.month) : [];
+    contributed = v ? v.months.map(m => m.contributed) : [];
+    value = v ? v.months.map(m => m.value) : [];
   } else {
-    statEl.innerHTML = `<span class="text-muted">${fmtINR(d.total_contributed)} contributed so far — update a vehicle's value below to track gains/losses.</span>`;
+    labels = d.combined_months.map(m => m.month);
+    contributed = d.combined_months.map(m => m.contributed);
+    value = d.combined_months.map(m => m.value);
   }
 
-  if (chartsAvailable()) {
-    if (investmentsChart) investmentsChart.destroy();
-    investmentsChart = new Chart(document.getElementById('investments-chart'), {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'Contributed',
-            data: contributed,
-            borderColor: '#eab308',
-            backgroundColor: 'rgba(234,179,8,0.08)',
-            fill: true,
-            tension: 0.25,
-            pointRadius: 0,
-            borderWidth: 2,
-          },
-          {
-            label: 'Value',
-            data: value,
-            borderColor: '#34d399',
-            backgroundColor: 'transparent',
-            spanGaps: true,
-            tension: 0.25,
-            pointRadius: 3,
-            pointBackgroundColor: '#34d399',
-            pointHoverRadius: 5,
-            borderWidth: 2,
-          },
-        ],
-      },
-      options: {
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { labels: { color: '#8b8fa3', usePointStyle: true, boxWidth: 8 } },
-          tooltip: { callbacks: { label: (ctx) => ctx.raw == null ? null : `${ctx.dataset.label}: ${fmtINR(ctx.raw)}` } },
-        },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
-          y: { grid: { color: '#1b1e29' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
-        },
-      },
-    });
-  } else {
+  if (!chartsAvailable()) {
     noChartFallback('investments-chart');
+    return;
+  }
+  if (investmentsChart) investmentsChart.destroy();
+  investmentsChart = new Chart(document.getElementById('investments-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Contributed',
+          data: contributed,
+          borderColor: '#eab308',
+          backgroundColor: 'rgba(234,179,8,0.08)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 0,
+          borderWidth: 2,
+        },
+        {
+          label: 'Value',
+          data: value,
+          borderColor: '#34d399',
+          backgroundColor: 'transparent',
+          spanGaps: true,
+          tension: 0.25,
+          pointRadius: 3,
+          pointBackgroundColor: '#34d399',
+          pointHoverRadius: 5,
+          borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#8b8fa3', usePointStyle: true, boxWidth: 8 } },
+        tooltip: { callbacks: { label: (ctx) => ctx.raw == null ? null : `${ctx.dataset.label}: ${fmtINR(ctx.raw)}` } },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#8b8fa3' } },
+        y: { grid: { color: '#1b1e29' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+      },
+    },
+  });
+}
+
+async function loadInvestments(month) {
+  const d = await fetchJSON('/api/investments', { month, n: 12 });
+  investmentsCache = d;
+
+  const select = document.getElementById('vehicle-chart-select');
+  const previousValue = selectedVehicleChart;
+  select.innerHTML = '<option value="">Combined (all vehicles)</option>' +
+    d.vehicles.map(v => `<option value="${v.category}">${v.category}${v.parent_category ? ' (' + v.parent_category + ')' : ''}</option>`).join('');
+  select.value = d.vehicles.some(v => v.category === previousValue) ? previousValue : '';
+  selectedVehicleChart = select.value;
+
+  renderInvestmentsChart(d, selectedVehicleChart);
+
+  const statEl = document.getElementById('investments-stat');
+  if (d.total_gain !== null && d.total_gain !== undefined) {
+    const sign = d.total_gain >= 0 ? '+' : '−';
+    const gainColor = d.total_gain >= 0 ? 'text-emerald-400' : 'text-red-400';
+    const pctStr = (d.total_gain_pct !== null && d.total_gain_pct !== undefined) ? ` (${d.total_gain_pct.toFixed(1)}%)` : '';
+    statEl.innerHTML = `Value ${fmtINR(d.total_value)} vs ${fmtINR(d.total_contributed)} contributed — ` +
+      `<span class="${gainColor}">${sign}${fmtINR(Math.abs(d.total_gain))}${pctStr}</span>`;
+  } else {
+    statEl.innerHTML = `<span class="text-muted">${fmtINR(d.total_contributed)} contributed so far — update a vehicle's value below to track gains/losses.</span>`;
   }
 
   const list = document.getElementById('vehicles-list');
@@ -743,26 +802,48 @@ async function loadInvestments(month) {
 
   list.innerHTML = d.vehicles.map(v => {
     const hasValue = v.latest_value !== null && v.latest_value !== undefined;
-    const gainColor = hasValue && v.gain >= 0 ? 'text-emerald-400' : 'text-red-400';
+    const hasGain = v.gain !== null && v.gain !== undefined;
+    const gainColor = hasGain && v.gain >= 0 ? 'text-emerald-400' : 'text-red-400';
     const staleClass = v.updated_days_ago !== null && v.updated_days_ago > 45 ? 'text-amber-400' : 'text-muted';
+    const parentTag = v.parent_category ? `<span class="tag bg-[#21242f] text-muted">${v.parent_category}</span>` : '';
+    let targetHtml = '';
+    if (v.target_amount) {
+      const pct = Math.min(v.target_progress_pct || 0, 100);
+      const dateStr = v.target_date ? ` · by ${v.target_date}` : '';
+      targetHtml = `
+      <div class="mt-2">
+        <div class="flex justify-between text-xs text-muted mb-1">
+          <span>Target ${fmtINR(v.target_amount)}${dateStr}</span>
+          <span class="tnum">${(v.target_progress_pct || 0).toFixed(0)}%</span>
+        </div>
+        <div class="h-1.5 rounded-full bg-[#21242f] overflow-hidden">
+          <div class="h-full bg-emerald-500" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+    }
     return `
     <div class="border border-[#262a38] rounded-xl p-3" data-vehicle="${v.category}">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
         <span class="flex items-center gap-2 font-medium">
           <span class="w-2.5 h-2.5 rounded-full inline-block" style="background:${v.color}"></span>
           ${v.category}
+          ${parentTag}
         </span>
         <span class="text-xs ${staleClass}">${daysAgoLabel(v.updated_days_ago)}</span>
       </div>
       <div class="flex flex-wrap items-center justify-between gap-2 text-sm mb-2">
         <span class="text-muted tnum">Contributed ${fmtINR(v.contributed)}</span>
         ${hasValue
-          ? `<span class="tnum">Value ${fmtINR(v.latest_value)} <span class="${gainColor}">(${v.gain >= 0 ? '+' : '−'}${fmtINR(Math.abs(v.gain))}, ${v.gain_pct.toFixed(1)}%)</span></span>`
+          ? (hasGain
+              ? `<span class="tnum">Value ${fmtINR(v.latest_value)} <span class="${gainColor}">(${v.gain >= 0 ? '+' : '−'}${fmtINR(Math.abs(v.gain))}, ${v.gain_pct.toFixed(1)}%)</span></span>`
+              : `<span class="tnum">Value ${fmtINR(v.latest_value)} <span class="text-muted">(first recorded value — gain shows from next update)</span></span>`)
           : `<span class="text-muted">No value logged yet</span>`}
       </div>
-      <div class="flex items-center gap-2">
+      ${targetHtml}
+      <div class="flex items-center gap-2 mt-2">
         <input type="number" placeholder="Update value" class="vehicle-value-input text-xs px-2 py-1.5 flex-1" />
         <button class="vehicle-save-value text-xs btn-primary rounded px-3 py-1.5">Save</button>
+        <button class="vehicle-view-chart text-xs icon-btn card px-2 py-1.5">📈 Chart</button>
       </div>
     </div>
   `; }).join('');
@@ -782,8 +863,20 @@ async function loadInvestments(month) {
       input.value = '';
       loadInvestments(m);
     });
+    row.querySelector('.vehicle-view-chart').addEventListener('click', () => {
+      const select = document.getElementById('vehicle-chart-select');
+      select.value = vehicle;
+      selectedVehicleChart = vehicle;
+      renderInvestmentsChart(investmentsCache, vehicle);
+      document.getElementById('investments-chart').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
   });
 }
+
+document.getElementById('vehicle-chart-select').addEventListener('change', (e) => {
+  selectedVehicleChart = e.target.value;
+  if (investmentsCache) renderInvestmentsChart(investmentsCache, selectedVehicleChart);
+});
 
 function renderRecurringGroup(items, listId, emptyId, suffix) {
   const list = document.getElementById(listId);
@@ -903,6 +996,14 @@ async function loadAll() {
   ]);
 }
 
+document.getElementById('spend-view-toggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('.view-pill');
+  if (!btn) return;
+  selectedSpendView = btn.dataset.view;
+  const month = monthPicker.value || currentMonthStr();
+  loadSummary(month, selectedSpendView).catch((e) => console.error(e));
+});
+
 monthPicker.addEventListener('change', loadAll);
 loadAll();
 loadRecap().catch((e) => console.error(e));
@@ -958,8 +1059,14 @@ document.getElementById('save-settings').addEventListener('click', async () => {
 // ---- Add investment vehicle modal ---------------------------------------
 
 const addVehicleModal = document.getElementById('add-vehicle-modal');
-document.getElementById('open-add-vehicle').addEventListener('click', () => {
+document.getElementById('open-add-vehicle').addEventListener('click', async () => {
   document.getElementById('vehicle-name').value = '';
+  document.getElementById('vehicle-target-amount').value = '';
+  document.getElementById('vehicle-target-date').value = '';
+  const parentSelect = document.getElementById('vehicle-parent');
+  const d = await fetchJSON('/api/categories');
+  parentSelect.innerHTML = '<option value="">— none, top-level —</option>' +
+    d.categories.filter(c => c.kind === 'saving').map(c => `<option value="${c.name}">${c.name}</option>`).join('');
   addVehicleModal.classList.remove('hidden');
   addVehicleModal.classList.add('flex');
 });
@@ -971,10 +1078,14 @@ document.getElementById('save-vehicle').addEventListener('click', async () => {
   const name = document.getElementById('vehicle-name').value.trim();
   if (!name) return;
   const color = document.getElementById('vehicle-color').value;
+  const parent_category = document.getElementById('vehicle-parent').value || null;
+  const targetAmountVal = document.getElementById('vehicle-target-amount').value;
+  const target_amount = targetAmountVal ? parseFloat(targetAmountVal) : null;
+  const target_date = document.getElementById('vehicle-target-date').value || null;
   const res = await fetch('/api/categories', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, color, kind: 'saving' }),
+    body: JSON.stringify({ name, color, kind: 'saving', parent_category, target_amount, target_date }),
   });
   if (res.ok) {
     addVehicleModal.classList.add('hidden');
@@ -1068,10 +1179,24 @@ async function addKeyword(name, inputEl) {
 
 async function renderCategoriesEditor() {
   const d = await fetchJSON('/api/categories');
-  const editor = document.getElementById('categories-editor');
-  editor.innerHTML = d.categories.map(c => `
-    <div class="border border-[#262a38] rounded-xl p-3" data-cat="${c.name}">
+
+  // Group so a sub-category (e.g. a SIP nested under Investments) renders
+  // indented directly beneath its parent, instead of flat in DB order.
+  const byName = {};
+  d.categories.forEach(c => { byName[c.name] = c; });
+  const childrenOf = {};
+  d.categories.forEach(c => {
+    if (c.parent_category && byName[c.parent_category]) {
+      (childrenOf[c.parent_category] = childrenOf[c.parent_category] || []).push(c);
+    }
+  });
+  const topLevel = d.categories.filter(c => !c.parent_category || !byName[c.parent_category]);
+  const savingCategories = d.categories.filter(c => c.kind === 'saving');
+
+  const renderCat = (c, indented) => `
+    <div class="border border-[#262a38] rounded-xl p-3 ${indented ? 'ml-6' : ''}" data-cat="${c.name}">
       <div class="flex flex-wrap items-center gap-2 mb-2">
+        ${indented ? '<span class="text-muted text-xs">↳</span>' : ''}
         <input type="color" value="${c.color}" class="cat-color h-7 w-9 p-0.5" />
         <span class="font-medium flex-1">${c.name}</span>
         <select class="cat-kind text-xs px-2 py-1">
@@ -1084,13 +1209,26 @@ async function renderCategoriesEditor() {
         <button class="cat-save text-xs btn-primary rounded px-2 py-1">Save</button>
         ${c.name !== 'Other' ? '<button class="cat-delete text-xs text-red-400 hover:text-red-300 px-2 py-1">Delete</button>' : ''}
       </div>
+      ${c.kind === 'saving' ? `
+      <div class="mb-2">
+        <label class="text-[11px] text-muted mr-2">Sub-category of</label>
+        <select class="cat-parent text-xs px-2 py-1">
+          <option value="">— none, top-level —</option>
+          ${savingCategories.filter(o => o.name !== c.name).map(o => `<option value="${o.name}" ${c.parent_category === o.name ? 'selected' : ''}>${o.name}</option>`).join('')}
+        </select>
+      </div>` : ''}
       <div class="flex flex-wrap gap-1.5 items-center cat-keywords">
         ${c.keywords.map(k => `<span class="chip">${k}<button data-kw="${k}" class="kw-delete">&times;</button></span>`).join('')}
         <input type="text" placeholder="+ keyword" class="kw-add text-xs px-2 py-1 w-24" />
         <button class="kw-add-btn text-xs icon-btn card px-2 py-1">+ Add</button>
       </div>
     </div>
-  `).join('');
+  `;
+
+  const editor = document.getElementById('categories-editor');
+  editor.innerHTML = topLevel.map(c =>
+    renderCat(c, false) + (childrenOf[c.name] || []).map(child => renderCat(child, true)).join('')
+  ).join('');
 
   editor.querySelectorAll('[data-cat]').forEach(row => {
     const name = row.dataset.cat;
@@ -1099,11 +1237,18 @@ async function renderCategoriesEditor() {
       const color = row.querySelector('.cat-color').value;
       const kind = row.querySelector('.cat-kind').value;
       const capVal = row.querySelector('.cat-cap').value;
+      const parentSelect = row.querySelector('.cat-parent');
+      const parentVal = parentSelect ? parentSelect.value : '';
       await fetch(`/api/categories/${encodeURIComponent(name)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ color, kind, monthly_cap: capVal === '' ? null : parseFloat(capVal), clear_cap: capVal === '' }),
+        body: JSON.stringify({
+          color, kind,
+          monthly_cap: capVal === '' ? null : parseFloat(capVal), clear_cap: capVal === '',
+          parent_category: parentVal || null, clear_parent: parentVal === '',
+        }),
       });
+      renderCategoriesEditor();
       loadAll();
     });
 

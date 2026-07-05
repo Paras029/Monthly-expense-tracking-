@@ -36,35 +36,80 @@ def _last_n_months(n: int, month: str) -> list[str]:
     return months
 
 
+def _savings_effective_balance(month):
+    """Sum across all kind='saving' vehicles of (manually-set value as of
+    this month if one exists, else cumulative contributed-to-date as a floor
+    estimate) — a "real" savings figure that updates the moment a vehicle's
+    value is set, not just when a new transaction is logged. Shared by the
+    top Savings card and the Long-term investments total so they always
+    agree."""
+    total = 0.0
+    for cat in db.get_categories():
+        if cat["kind"] != "saving":
+            continue
+        snap = db.get_snapshot_as_of(cat["name"], month)
+        if snap:
+            total += snap["value"]
+        else:
+            contributed = db.get_cumulative_savings_contributions([month], category=cat["name"])
+            total += contributed[0]["contributed"] if contributed else 0.0
+    return total
+
+
 @app.get("/api/summary")
-def api_summary(month: str = Query(default=None)):
+def api_summary(month: str = Query(default=None), view: str = Query(default="all")):
     month = month or _current_month()
     m = insights.compute_metrics(month)
     categories = {c["name"]: c for c in db.get_categories()}
 
-    # breakdown feeds the "where the money goes" donut — it excludes
-    # kind='saving' categories (e.g. Investments) so contributions don't
-    # dominate a chart about spending habits; they get their own Savings chart.
+    # "view" re-slices the same month's breakdown for the "where the money
+    # goes" toggle: 'all' is the usual spend-pattern donut (excludes
+    # saving/liquid so contributions don't dominate a chart about spending
+    # habits); 'salary'/'credit' slice by how it was paid; 'saving'/'liquid'
+    # show just those two kinds' own per-category split (the very thing 'all'
+    # deliberately excludes).
+    if view == "all":
+        by_view = m["by_category_spend"]
+    elif view in ("salary", "credit"):
+        by_view = {}
+        for t in db.get_transactions_for_month(month):
+            if t["payment_source"] == view:
+                by_view[t["category"]] = by_view.get(t["category"], 0.0) + t["amount"]
+    elif view in ("saving", "liquid"):
+        by_view = {
+            cat: amount for cat, amount in m["by_category"].items()
+            if categories.get(cat, {}).get("kind") == view
+        }
+    else:
+        raise HTTPException(400, f"Unknown view {view!r}")
+
+    view_total = sum(by_view.values())
     breakdown = [
         {
             "category": cat,
             "amount": amount,
-            "pct": (amount / m["spend_total"] * 100) if m["spend_total"] else 0,
+            "pct": (amount / view_total * 100) if view_total else 0,
             "color": categories.get(cat, {}).get("color", "#64748b"),
             "kind": categories.get(cat, {}).get("kind", "discretionary"),
         }
-        for cat, amount in sorted(m["by_category_spend"].items(), key=lambda kv: -kv[1])
+        for cat, amount in sorted(by_view.items(), key=lambda kv: -kv[1])
     ]
 
     days_left = max(m["days_total"] - m["days_elapsed"], 0)
     combined_left = m["salary_left"] + m["credit_left"]
     per_day_left = (combined_left / days_left) if days_left else 0.0
-    pace_per_day = (m["total"] / m["days_elapsed"]) if m["days_elapsed"] else 0.0
+    # Pace reflects actual day-to-day (variable) spend, not total — a fixed
+    # lump sum (rent, a SIP) logged once on day 1 shouldn't read as a
+    # ₹21,500/day pace for the rest of the month.
+    pace_per_day = (m["variable_total"] / m["days_elapsed"]) if m["days_elapsed"] else 0.0
 
-    # cumulative, all-time balances (through the end of the selected month) —
-    # these power the top Savings/Liquid Fund cards, distinct from
-    # savings_total/liquid_total which are just *this month's* contribution.
-    savings_balance = db.get_cumulative_balance_by_kind("saving", through_month=month)
+    # savings_balance is the "effective" value (manually-set vehicle values,
+    # falling back to contributed-to-date for ones never valued) — distinct
+    # from savings_total, which is just *this month's* new contribution.
+    # liquid_balance has no value/gain concept (it's cash, not an investment)
+    # so it's simply the cumulative running balance, which already carries
+    # forward correctly month to month.
+    savings_balance = _savings_effective_balance(month)
     liquid_balance = db.get_cumulative_balance_by_kind("liquid", through_month=month)
 
     return {
@@ -90,6 +135,8 @@ def api_summary(month: str = Query(default=None)):
         "savings_balance": savings_balance,
         "liquid_total": m["liquid_total"],
         "liquid_balance": liquid_balance,
+        "view": view,
+        "view_total": view_total,
         "breakdown": breakdown,
     }
 
@@ -186,22 +233,43 @@ def api_recurring():
     }
 
 
+def _vehicle_gain(category, as_of_month):
+    """Incremental gain: new value vs. (previous snapshot's value + whatever
+    was actually contributed between the two snapshots) — not vs. all-time
+    contributed, which overstates gain the moment a vehicle has any history
+    the app didn't track (or simply hasn't been re-valued in a while).
+    Returns (gain, gain_pct, baseline) — all None if there's no previous
+    snapshot to compare against (the first-ever value just sets a baseline,
+    it isn't a "gain")."""
+    prev = db.get_previous_snapshot_before(category, as_of_month)
+    if not prev:
+        return None, None, None
+    as_of = db.get_snapshot_as_of(category, as_of_month)
+    contributed_between = db.get_contributions_between(category, prev["month"], as_of_month)
+    baseline = prev["value"] + contributed_between
+    gain = as_of["value"] - baseline
+    gain_pct = (gain / baseline * 100) if baseline else None
+    return gain, gain_pct, baseline
+
+
 @app.get("/api/investments")
 def api_investments(month: str = Query(default=None), n: int = Query(default=12)):
     """Long-term investment tracking, per vehicle: each kind='saving' category
     (SIP, a gold plan, FDs, ...) is tracked independently — its own
     automatically-computed cumulative contribution, its own manually-updated
-    current value, and how long ago that value was last updated. Also
-    returns a combined trend (contributed vs value summed across vehicles,
-    forward-filling each vehicle's last known value between updates) for a
-    single overview chart."""
+    current value, and how long ago that value was last updated. Gain is
+    incremental (see _vehicle_gain) — never a since-inception comparison
+    against all-time contributed, which is misleading for a vehicle with any
+    pre-existing history. "Effective value" (the manually-set value if one
+    exists as of this month, else contributed-to-date as a floor estimate)
+    feeds both the combined chart and the top Savings card, so updating a
+    vehicle's value immediately updates the top-level figure too."""
     month = month or _current_month()
     months = _last_n_months(n, month)
     saving_categories = [c for c in db.get_categories() if c["kind"] == "saving"]
 
     combined_contributed = {m: 0.0 for m in months}
-    combined_value = {m: 0.0 for m in months}
-    combined_value_known = {m: False for m in months}
+    combined_effective_value = {m: 0.0 for m in months}
 
     vehicles = []
     for cat in saving_categories:
@@ -210,52 +278,68 @@ def api_investments(month: str = Query(default=None), n: int = Query(default=12)
             row["month"]: row["contributed"]
             for row in db.get_cumulative_savings_contributions(months, category=name)
         }
-        snapshots = db.get_investment_snapshots(name)
-        latest_snapshot = db.get_latest_investment_snapshot(name)
-
-        carry = None
+        vehicle_months = []
         for m in months:
-            if m in snapshots:
-                carry = snapshots[m]["value"]
-            combined_contributed[m] += contributed_by_month.get(m, 0.0)
-            if carry is not None:
-                combined_value[m] += carry
-                combined_value_known[m] = True
+            snap = db.get_snapshot_as_of(name, m)
+            contributed = contributed_by_month.get(m, 0.0)
+            value = snap["value"] if snap else None
+            effective = value if value is not None else contributed
+            vehicle_months.append({"month": m, "contributed": contributed, "value": value})
+            combined_contributed[m] += contributed
+            combined_effective_value[m] += effective
 
         latest_contributed = contributed_by_month.get(months[-1], 0.0) if months else 0.0
+        latest_snapshot = db.get_latest_investment_snapshot(name)
         latest_value = latest_snapshot["value"] if latest_snapshot else None
         updated_at = latest_snapshot["updated_at"] if latest_snapshot else None
         updated_days_ago = None
         if updated_at:
             updated_days_ago = (date.today() - datetime.fromisoformat(updated_at).date()).days
-        gain = (latest_value - latest_contributed) if latest_value is not None else None
-        gain_pct = (gain / latest_contributed * 100) if gain is not None and latest_contributed else None
+
+        gain, gain_pct, baseline = None, None, None
+        if latest_snapshot:
+            gain, gain_pct, baseline = _vehicle_gain(name, latest_snapshot["month"])
+
+        target_progress = None
+        if cat["target_amount"]:
+            effective_now = latest_value if latest_value is not None else latest_contributed
+            target_progress = min(effective_now / cat["target_amount"] * 100, 999)
 
         vehicles.append({
             "category": name,
             "color": cat["color"],
+            "parent_category": cat["parent_category"],
             "contributed": latest_contributed,
             "latest_value": latest_value,
             "updated_at": updated_at,
             "updated_days_ago": updated_days_ago,
             "gain": gain,
             "gain_pct": gain_pct,
+            "target_amount": cat["target_amount"],
+            "target_date": cat["target_date"],
+            "target_progress_pct": target_progress,
+            "months": vehicle_months,
+            "_baseline": baseline,
         })
 
     vehicles.sort(key=lambda v: -v["contributed"])
 
     combined_months = [
-        {
-            "month": m,
-            "contributed": combined_contributed[m],
-            "value": combined_value[m] if combined_value_known[m] else None,
-        }
+        {"month": m, "contributed": combined_contributed[m], "value": combined_effective_value[m]}
         for m in months
     ]
     total_contributed = combined_contributed[months[-1]] if months else 0.0
-    total_value = combined_value[months[-1]] if months and combined_value_known[months[-1]] else None
-    total_gain = (total_value - total_contributed) if total_value is not None else None
-    total_gain_pct = (total_gain / total_contributed * 100) if total_gain is not None and total_contributed else None
+    total_value = combined_effective_value[months[-1]] if months else 0.0
+    known_gains = [v["gain"] for v in vehicles if v["gain"] is not None]
+    total_gain = sum(known_gains) if known_gains else None
+    # Aggregate % must be on the same scale as each vehicle's own gain_pct: gain
+    # over the *baseline* (prev value + contributions since), not total_contributed
+    # (all-time contributed), which would understate/overstate the real ratio.
+    known_baselines = [v["_baseline"] for v in vehicles if v["_baseline"] is not None]
+    total_baseline = sum(known_baselines) if known_baselines else 0.0
+    total_gain_pct = (total_gain / total_baseline * 100) if total_gain is not None and total_baseline else None
+    for v in vehicles:
+        del v["_baseline"]
 
     return {
         "vehicles": vehicles,
@@ -368,6 +452,9 @@ class CategoryIn(BaseModel):
     color: str
     kind: str
     monthly_cap: Optional[float] = None
+    parent_category: Optional[str] = None
+    target_amount: Optional[float] = None
+    target_date: Optional[str] = None
 
 
 class CategoryUpdate(BaseModel):
@@ -375,6 +462,12 @@ class CategoryUpdate(BaseModel):
     kind: Optional[str] = None
     monthly_cap: Optional[float] = None
     clear_cap: bool = False
+    parent_category: Optional[str] = None
+    clear_parent: bool = False
+    target_amount: Optional[float] = None
+    clear_target_amount: bool = False
+    target_date: Optional[str] = None
+    clear_target_date: bool = False
 
 
 class KeywordIn(BaseModel):
@@ -399,7 +492,14 @@ def api_add_category(body: CategoryIn):
         raise HTTPException(400, f"kind must be one of {sorted(VALID_KINDS)}")
     if body.name in db.get_category_names():
         raise HTTPException(409, f"Category {body.name!r} already exists")
-    db.add_category(body.name, body.color, body.kind, body.monthly_cap)
+    if body.parent_category and body.parent_category not in db.get_category_names():
+        raise HTTPException(404, f"Parent category {body.parent_category!r} not found")
+    db.add_category(
+        body.name, body.color, body.kind, body.monthly_cap,
+        parent_category=body.parent_category,
+        target_amount=body.target_amount,
+        target_date=body.target_date,
+    )
     return {"ok": True}
 
 
@@ -409,8 +509,16 @@ def api_update_category(name: str, body: CategoryUpdate):
         raise HTTPException(404, f"Category {name!r} not found")
     if body.kind is not None and body.kind not in VALID_KINDS:
         raise HTTPException(400, f"kind must be one of {sorted(VALID_KINDS)}")
+    if body.parent_category and body.parent_category not in db.get_category_names():
+        raise HTTPException(404, f"Parent category {body.parent_category!r} not found")
     cap = None if body.clear_cap else (body.monthly_cap if body.monthly_cap is not None else -1)
-    db.update_category(name, color=body.color, kind=body.kind, monthly_cap=cap)
+    parent = None if body.clear_parent else (body.parent_category if body.parent_category is not None else -1)
+    target_amount = None if body.clear_target_amount else (body.target_amount if body.target_amount is not None else -1)
+    target_date = None if body.clear_target_date else (body.target_date if body.target_date is not None else -1)
+    db.update_category(
+        name, color=body.color, kind=body.kind, monthly_cap=cap,
+        parent_category=parent, target_amount=target_amount, target_date=target_date,
+    )
     return {"ok": True}
 
 

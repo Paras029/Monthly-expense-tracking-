@@ -23,10 +23,13 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 CREATE TABLE IF NOT EXISTS categories (
-  name         TEXT PRIMARY KEY,
-  color        TEXT NOT NULL,
-  kind         TEXT NOT NULL,
-  monthly_cap  REAL
+  name            TEXT PRIMARY KEY,
+  color           TEXT NOT NULL,
+  kind            TEXT NOT NULL,
+  monthly_cap     REAL,
+  parent_category TEXT REFERENCES categories(name),  -- e.g. an investment vehicle nested under 'Investments'
+  target_amount   REAL,  -- optional savings/investment goal for this category
+  target_date     TEXT   -- optional 'YYYY-MM-DD' goal date
 );
 
 CREATE TABLE IF NOT EXISTS keywords (
@@ -63,6 +66,12 @@ TRANSACTION_MIGRATIONS = {
     "recurrence": "TEXT DEFAULT 'one-off'",
 }
 
+CATEGORY_MIGRATIONS = {
+    "parent_category": "TEXT REFERENCES categories(name)",
+    "target_amount": "REAL",
+    "target_date": "TEXT",
+}
+
 
 @contextmanager
 def get_conn():
@@ -88,6 +97,13 @@ def _migrate_transactions(conn):
         # 'yearly' (cross-cutting) from its default 'monthly' (which really
         # just meant "not yearly", i.e. an ordinary one-off transaction)
         conn.execute("UPDATE transactions SET recurrence = 'yearly' WHERE period = 'yearly'")
+
+
+def _migrate_categories(conn):
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
+    for column, decl in CATEGORY_MIGRATIONS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE categories ADD COLUMN {column} {decl}")
 
 
 def _migrate_investments_kind(conn):
@@ -137,6 +153,7 @@ def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
         _migrate_transactions(conn)
+        _migrate_categories(conn)
         _migrate_investment_snapshots(conn)
 
         for name, meta in config.DEFAULT_CATEGORIES.items():
@@ -389,17 +406,20 @@ def get_category_names():
         return [r["name"] for r in rows]
 
 
-def add_category(name, color, kind, monthly_cap=None):
+def add_category(name, color, kind, monthly_cap=None, parent_category=None,
+                  target_amount=None, target_date=None):
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO categories (name, color, kind, monthly_cap) VALUES (?, ?, ?, ?)",
-            (name, color, kind, monthly_cap),
+            "INSERT INTO categories (name, color, kind, monthly_cap, parent_category, "
+            "target_amount, target_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (name, color, kind, monthly_cap, parent_category, target_amount, target_date),
         )
 
 
-def update_category(name, color=None, kind=None, monthly_cap=-1):
-    """monthly_cap=-1 is the sentinel for 'leave unchanged' since None is a
-    valid value (no cap)."""
+def update_category(name, color=None, kind=None, monthly_cap=-1,
+                     parent_category=-1, target_amount=-1, target_date=-1):
+    """-1 is the sentinel for 'leave unchanged' on nullable fields, since
+    None is itself a valid value (no cap/parent/target)."""
     with get_conn() as conn:
         current = conn.execute(
             "SELECT * FROM categories WHERE name = ?", (name,)
@@ -407,11 +427,15 @@ def update_category(name, color=None, kind=None, monthly_cap=-1):
         if not current:
             return False
         conn.execute(
-            "UPDATE categories SET color = ?, kind = ?, monthly_cap = ? WHERE name = ?",
+            "UPDATE categories SET color = ?, kind = ?, monthly_cap = ?, "
+            "parent_category = ?, target_amount = ?, target_date = ? WHERE name = ?",
             (
                 color if color is not None else current["color"],
                 kind if kind is not None else current["kind"],
                 monthly_cap if monthly_cap != -1 else current["monthly_cap"],
+                parent_category if parent_category != -1 else current["parent_category"],
+                target_amount if target_amount != -1 else current["target_amount"],
+                target_date if target_date != -1 else current["target_date"],
                 name,
             ),
         )
@@ -503,6 +527,51 @@ def get_latest_investment_snapshot(category):
             (category,),
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_snapshot_as_of(category, month):
+    """The most recent snapshot at or before `month` — the value as it was
+    known as of that point, forward-filled from whenever it was last set."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT month, value, note, updated_at FROM investment_snapshots "
+            "WHERE category = ? AND month <= ? ORDER BY month DESC LIMIT 1",
+            (category, month),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_previous_snapshot_before(category, month):
+    """The snapshot immediately before `month` (strictly earlier) — the
+    baseline used to compute incremental gain for the snapshot at `month`."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT month, value, note, updated_at FROM investment_snapshots "
+            "WHERE category = ? AND month < ? ORDER BY month DESC LIMIT 1",
+            (category, month),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_contributions_between(category, after_month_exclusive, through_month_inclusive):
+    """Sum of a category's transactions after the end of after_month_exclusive
+    (or all-time if None) through the end of through_month_inclusive — the
+    real money added between two investment snapshots, used to compute
+    incremental gain (new value vs. previous value + what was added since)."""
+    with get_conn() as conn:
+        if after_month_exclusive:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions "
+                "WHERE category = ? AND spent_on > ? AND spent_on <= ?",
+                (category, f"{after_month_exclusive}-31", f"{through_month_inclusive}-31"),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions "
+                "WHERE category = ? AND spent_on <= ?",
+                (category, f"{through_month_inclusive}-31"),
+            ).fetchone()
+        return row["total"]
 
 
 def set_investment_snapshot(category, month, value, note=None):
