@@ -13,7 +13,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import ai_insights
-import chat
 import db
 import export
 import insights
@@ -198,29 +197,6 @@ def api_recap(date_: str = Query(default=None, alias="date")):
 def api_recap_refresh(date_: str = Query(default=None, alias="date")):
     day = date_ or _today_str()
     return {"date": day, **ai_insights.generate_recap(day, force=True)}
-
-
-class ChatTurn(BaseModel):
-    role: str  # 'user' | 'model'
-    text: str
-
-
-class ChatIn(BaseModel):
-    message: str
-    history: list[ChatTurn] = []
-    month: Optional[str] = None
-
-
-@app.post("/api/chat")
-def api_chat(body: ChatIn):
-    """Chat assistant: one Gemini call per submitted message (see chat.py).
-    `history` is the client's own capped conversation log, replayed back so
-    the model has context — this app has no server-side chat storage."""
-    message = body.message.strip()
-    if not message:
-        raise HTTPException(400, "message cannot be empty")
-    history = [{"role": t.role, "text": t.text} for t in body.history]
-    return chat.chat_reply(history, message, month=body.month)
 
 
 @app.get("/api/daily-burn")

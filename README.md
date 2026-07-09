@@ -83,12 +83,6 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
 - **Export your data:** the ⬇ Export button in the dashboard header downloads
   a full-history Excel workbook (transactions, monthly summary, category
   breakdown, accounts ledger, investment history) for offline analysis.
-- **Ask the assistant:** the "💬 Ask about your finances" section can answer
-  questions about your spending, summarize or restructure any part of the
-  dashboard, and give basic guidance on investing/loans with pointers to
-  general resources — needs `GEMINI_API_KEY` set. It uses your dashboard's
-  aggregate data, never raw transactions, and costs one Gemini call per
-  message you send (nothing on typing or polling).
 - **Insights & Recap in one place:** today's snapshot, this month's insight
   bullets, cross-month trend commentary (once you have a few months of
   history), and the AI daily recap all live together in one dashboard

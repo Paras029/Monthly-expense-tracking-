@@ -124,7 +124,6 @@
       <a href="#sec-summary" class="navpill">Overview</a>
       <a href="#sec-spending" class="navpill">Spending</a>
       <a href="#sec-recap" class="navpill">Insights &amp; Recap</a>
-      <a href="#sec-chat" class="navpill">Assistant</a>
       <a href="#sec-burn" class="navpill">Daily burn</a>
       <a href="#sec-trends" class="navpill">Trends</a>
       <a href="#sec-oneoff" class="navpill">One-off</a>
@@ -234,17 +233,6 @@
     </div>
     <p id="recap-source" class="text-xs text-muted mb-2"></p>
     <ul id="recap-list" class="space-y-2.5 text-sm"></ul>
-  </section>
-
-  <!-- Chat assistant -->
-  <section id="sec-chat" class="card p-4 sm:p-5">
-    <h2 class="font-display text-lg mb-1">💬 Ask about your finances</h2>
-    <p class="text-xs text-muted mb-3">Ask about your spending, get a summary, or basic guidance on saving/investing/loans. Uses your dashboard data, not raw transactions — general education, not professional advice.</p>
-    <div id="chat-messages" class="space-y-3 text-sm mb-3 max-h-80 overflow-y-auto"></div>
-    <div class="flex gap-2">
-      <input id="chat-input" type="text" placeholder="e.g. How much did I spend on food this month?" class="flex-1 px-3 py-2 text-sm" />
-      <button id="chat-send" class="btn-primary text-sm rounded-lg px-4 py-2 whitespace-nowrap">Send</button>
-    </div>
   </section>
 
   <!-- Daily burn -->
@@ -1350,57 +1338,6 @@ document.getElementById('category-filter').addEventListener('change', (e) => {
   const month = monthPicker.value || currentMonthStr();
   loadDailyBurn(month, selectedCategory);
   loadMonthly(month, selectedCategory);
-});
-
-// ---- Chat assistant -------------------------------------------------------
-
-let chatHistory = []; // [{role: 'user'|'model', text}] — client-side only, capped
-
-function renderChatMessage(role, text) {
-  const messages = document.getElementById('chat-messages');
-  const bubble = document.createElement('div');
-  bubble.className = role === 'user'
-    ? 'ml-auto max-w-[85%] bg-amber-500/15 border border-amber-500/30 rounded-xl rounded-br-sm px-3 py-2 whitespace-pre-wrap'
-    : 'mr-auto max-w-[85%] bg-[#1b1e29] border border-[#262a38] rounded-xl rounded-bl-sm px-3 py-2 whitespace-pre-wrap';
-  bubble.textContent = text;
-  messages.appendChild(bubble);
-  messages.scrollTop = messages.scrollHeight;
-  return bubble;
-}
-
-async function sendChatMessage() {
-  const input = document.getElementById('chat-input');
-  const message = input.value.trim();
-  if (!message) return;
-  input.value = '';
-  renderChatMessage('user', message);
-
-  const sendBtn = document.getElementById('chat-send');
-  sendBtn.disabled = true;
-  const thinking = renderChatMessage('model', '…thinking');
-
-  try {
-    const month = monthPicker.value || currentMonthStr();
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history: chatHistory, month }),
-    });
-    const data = await res.json().catch(() => ({}));
-    const reply = res.ok && data.reply ? data.reply : 'Sorry, something went wrong on the server — please try again.';
-    thinking.textContent = reply;
-    chatHistory.push({ role: 'user', text: message }, { role: 'model', text: reply });
-    if (chatHistory.length > 16) chatHistory = chatHistory.slice(-16); // cap token growth
-  } catch (e) {
-    thinking.textContent = 'Something went wrong — please try again.';
-  } finally {
-    sendBtn.disabled = false;
-  }
-}
-
-document.getElementById('chat-send').addEventListener('click', sendChatMessage);
-document.getElementById('chat-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') sendChatMessage();
 });
 
 // ---- Settings modal ----------------------------------------------------

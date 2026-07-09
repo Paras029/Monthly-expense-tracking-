@@ -78,7 +78,6 @@ expense-tracker/
 ├── parser.py            # regex-first parse + Gemini fallback classify
 ├── insights.py          # compute metrics + phrase insight bullets (no Gemini)
 ├── ai_insights.py       # AI daily recap: cached, ~1 Gemini call/day, rule-based fallback
-├── chat.py              # chat assistant: 1 Gemini call/message, compact context, capped history
 ├── export.py            # multi-sheet Excel export (openpyxl), reads db.py only
 ├── bot.py               # Telegram handlers  ← ONLY file to swap for WhatsApp
 ├── server.py            # FastAPI app + JSON API + serves dashboard
@@ -440,16 +439,12 @@ groceries 1200 weekly               -> cadence=weekly (expense_type stays the ca
 
 Keep Gemini usage minimal and wrapped in try/except so the bot never crashes on API issues.
 
-`parser.call_gemini()` (the shared REST call used by all three Gemini call sites — this
-classifier, the daily recap, and the chat assistant) retries up to twice more (3 attempts
-total, 1s/2s backoff) on a transient `429`/`5xx` from Google's side, or on a client-side
-network timeout/connection error (`requests.exceptions.RequestException`) — chat's larger
-multi-turn payload (system prompt + data snapshot + history) takes noticeably longer to
-generate than the short single-turn classify/recap prompts, so it's both more likely to
-land during a brief overload window on Google's side and more likely to run past a short
-read timeout. The read timeout itself is 60s (bumped from an original 30s once a real
-`ReadTimeout` showed up in practice for chat specifically). Non-retryable errors (a `4xx`
-other than 429, a parse failure) still fail immediately.
+`parser.call_gemini()` (the shared REST call used by both Gemini call sites — this
+classifier and the daily recap) retries up to twice more (3 attempts total, 1s/2s
+backoff) on a transient `429`/`5xx` from Google's side, or on a client-side network
+timeout/connection error (`requests.exceptions.RequestException`), with a 60s read
+timeout. Non-retryable errors (a `4xx` other than 429, a parse failure) still fail
+immediately.
 
 ---
 
@@ -554,13 +549,6 @@ CDNs are unreachable.
      recap for today on page load (zero extra Gemini calls); a "↻ Refresh" button
      force-regenerates. Shows which source produced it (`AI-generated` vs `Rule-based
      fallback`) and a timestamp.
-
-3b. **💬 Ask about your finances** — a small chat window (`chat.py`, see §9b) for
-   expense Q&A, dashboard summaries, and basic financial literacy guidance (investing
-   basics, loan considerations, pointers to general resources). One Gemini call per
-   submitted message — never per keystroke, never polled — with a compact pre-computed
-   data snapshot (never raw transactions) and a client-capped conversation history so
-   token usage per call stays bounded through a long session.
 
 4. **Daily burn** — one combo chart: a **day-by-day** bar (that day's own spend, not
    running) plus a **cumulative** line on a second y-axis, both fed by the same
@@ -681,7 +669,6 @@ GET  /api/summary                        -> cards (incl. wallet/savings/liquid b
 GET  /api/insights                       -> {today, insights, trends} — today's snapshot + monthly bullets (§9) + cross-month trend bullets (§9)
 GET  /api/recap                          -> cached AI daily recap {lines, source, generated_at}
 POST /api/recap/refresh                  -> force-regenerate today's recap (bypasses cache)
-POST /api/chat                           -> chat assistant reply {message, history: [{role, text}], month} -> {reply, source} (see §9b)
 GET  /api/daily-burn                     -> [{day, amount, cumulative}] per day; ?category= to filter to one category, or '__variable__' for variable-only spend across all categories
 GET  /api/monthly                        -> last 6 months total outflow; ?category= to filter to one category, or '__variable__' for variable-only
 GET  /api/savings                        -> last 6 months total for real investment-vehicle (expense_type='saving', no account_link) categories
@@ -824,43 +811,6 @@ replacement for the deterministic insights above.
   fall back to `insights.build_insights()` (still cached, tagged `source: 'fallback'` so
   the UI can show which one it got) — the recap card and `/recap` command never error out.
 
-### 9b. Chat assistant (`chat.py`)
-
-The third and last Gemini call site. Unlike the daily recap (capped at ~once/day,
-cached), the chat assistant calls Gemini **once per user-submitted message** — there's
-no cheaper way to answer an open-ended question — so the design leans hard on keeping
-each call small rather than reducing call frequency further:
-
-- **What it's for:** answering questions about the user's spending/budget/savings/
-  accounts, summarizing or restructuring a view of the dashboard on request, and basic
-  financial literacy guidance (how someone might start investing, what to weigh before
-  a loan for a big purchase) — framed as general education, not individualized
-  professional advice, with pointers to well-known general resources (SEBI/RBI investor
-  education, Zerodha Varsity) rather than specific stock/product recommendations.
-- **Data sent to Gemini** (`chat._gather_financial_context`): the same kind of compact
-  pre-computed aggregates as the daily recap — this month's spend split, accounts
-  balances, the last 6 months' totals, the category list (name/type/cap), which
-  categories are over cap, and each investment vehicle's latest value. **Never raw
-  transactions** — keeps the payload small and never exposes more line-item detail than
-  the dashboard itself already aggregates.
-- **Conversation history:** the app has no server-side chat storage — the browser holds
-  `chatHistory` (capped to the last 16 entries / 8 exchanges client-side) and replays it
-  on every request via `POST /api/chat`'s `history` field, since Gemini's
-  `generateContent` is stateless per call and needs the full turn sequence to maintain
-  context. The data snapshot is sent via the request's dedicated `systemInstruction`
-  field (rebuilt fresh each call, since the underlying spending data can change between
-  messages) rather than embedded as a fake first user/model turn inside `contents` —
-  `contents` holds only the real back-and-forth, which is both the API's documented
-  mechanism for this and avoids duplicating a data blob into the conversation history.
-- **Efficiency:** exactly one Gemini call per message the user actually sends — nothing
-  fires on typing, focus, or a timer. `parser.call_gemini()` gained optional `contents`
-  (a pre-built multi-turn list) and `system_instruction` params to support this shape
-  without duplicating the REST-call plumbing that already exists for the single-turn
-  category-classification and daily-recap call sites.
-- **Fallback:** if `GEMINI_API_KEY` is unset, replies with a plain message explaining
-  how to enable it (no wasted call); if the Gemini call itself fails, replies with a
-  short "try again" message instead of erroring the whole chat window out.
-
 ---
 
 ## 10. Config (`.env.example`)
@@ -949,8 +899,10 @@ bash run.sh
   `PUT /api/transactions/{id}` (§8). `/cat` and `/undo` remain the quick bot-side
   corrections for the *last* transaction only; there's no bot command to edit an
   arbitrary past row.
-- **Chat conversation persistence** — the chat assistant (§9b) deliberately keeps no
-  server-side history; a page refresh loses the conversation. Adding a `chat_messages`
-  table would be a reasonable follow-up if that turns out to matter in practice, but
-  isn't built now — the app has otherwise had zero persistent-history tables and this
-  would be the first, so it's worth waiting for an actual need rather than guessing.
+- **Chat assistant** — a Gemini-backed "Ask about your finances" chat window was built
+  and then removed: the chat's larger multi-turn request consistently ran into
+  timeouts/slow responses that the classify and daily-recap Gemini call sites (small,
+  single-turn prompts) never hit, and repeated fixes (retry/backoff, a 60s timeout, the
+  correct `systemInstruction` request shape, `thinkingLevel: minimal`) didn't resolve it
+  reliably enough. Could be revisited later — e.g. with a smaller/faster model, streamed
+  responses, or a trimmed-down payload — but isn't part of the app now.

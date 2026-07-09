@@ -24,30 +24,19 @@ _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 _RETRY_DELAYS = (1, 2)  # seconds, between the 3 attempts
 
 
-def call_gemini(prompt, temperature=0.0, contents=None, system_instruction=None):
+def call_gemini(prompt, temperature=0.0):
     """Plain REST call to the Gemini API — deliberately not the official
     google-genai SDK. That SDK pulls in google-auth -> cryptography, a
     package with compiled Rust native code; on Termux the PyPI wheel for
     cryptography is built for glibc and fails to dlopen against Android's
     Bionic libc. We only need API-key auth (no OAuth/JWT), so a bare HTTPS
     POST via `requests` avoids that whole native-dependency chain — also
-    used by ai_insights.py and chat.py, the app's other Gemini call sites.
-
-    Pass a plain string `prompt` for the common single-turn case (wrapped
-    automatically), or a pre-built multi-turn `contents` list (`[{"role":
-    "user"|"model", "parts": [{"text": ...}]}, ...]`) for chat.py's
-    conversation history — `prompt` is ignored when `contents` is given.
-    `system_instruction` (plain string, optional) goes in the dedicated
-    `systemInstruction` request field rather than being embedded as a fake
-    first conversation turn — the API's documented mechanism for this, and
-    lighter than duplicating a data blob inside `contents`.
+    used by ai_insights.py, the app's other Gemini call site.
 
     Retries up to twice more (3 attempts total, short backoff) on a
     transient 429/5xx from Google's side, or on a network-level timeout/
-    connection error — chat's larger multi-turn payload takes longer to
-    generate than a short classification/recap prompt, so it's more likely
-    to land during a brief overload window or just run past the read
-    timeout; neither should surface as a hard failure on the first try.
+    connection error — neither should surface as a hard failure on the
+    first try.
 
     Returns the response text, or None if no API key is configured. Raises
     on any HTTP/parsing error — callers are expected to catch and fall back.
@@ -55,21 +44,18 @@ def call_gemini(prompt, temperature=0.0, contents=None, system_instruction=None)
     if not config.GEMINI_API_KEY:
         return None
 
-    payload_contents = contents if contents is not None else [{"parts": [{"text": prompt}]}]
     payload = {
-        "contents": payload_contents,
+        "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
             # Gemini 3.x models default to 'medium' thinking effort, which adds
             # meaningful latency for no benefit on these simple classification/
-            # chat/recap tasks — 'minimal' (the lowest level gemini-3.5-flash
+            # recap tasks — 'minimal' (the lowest level gemini-3.5-flash
             # supports) keeps calls as fast as possible. Ignored harmlessly by
             # older (2.x) model families that don't support it.
             "thinkingConfig": {"thinkingLevel": "minimal"},
         },
     }
-    if system_instruction:
-        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
     headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
 
     resp = None
@@ -77,10 +63,6 @@ def call_gemini(prompt, temperature=0.0, contents=None, system_instruction=None)
     for delay in (*_RETRY_DELAYS, None):
         is_last_attempt = delay is None
         try:
-            # 60s read timeout: chat's larger multi-turn payload (system
-            # prompt + data snapshot + history) takes noticeably longer to
-            # generate than the short single-turn classify/recap prompts,
-            # and 30s wasn't always enough even at thinkingLevel=low.
             resp = requests.post(GEMINI_URL, headers=headers, json=payload, timeout=60)
         except requests.exceptions.RequestException as e:
             last_exc = e
