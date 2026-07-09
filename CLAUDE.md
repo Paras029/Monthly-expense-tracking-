@@ -136,11 +136,14 @@ CREATE TABLE IF NOT EXISTS settings (
 -- real balance — the Wallet's actual balance comes from logged income (see §5b).
 
 CREATE TABLE IF NOT EXISTS investment_snapshots (
-  category   TEXT NOT NULL,  -- an expense_type='saving' category name — each is its own "vehicle"
-  month      TEXT NOT NULL,  -- 'YYYY-MM'
-  value      REAL NOT NULL,  -- total value of this vehicle as of this month (manually entered)
-  note       TEXT,
-  updated_at TEXT,           -- when last set, for "updated N days ago"
+  category             TEXT NOT NULL,  -- an expense_type='saving' category name — each is its own "vehicle"
+  month                TEXT NOT NULL,  -- 'YYYY-MM'
+  value                REAL NOT NULL,  -- total value of this vehicle as of this month (manually entered)
+  note                 TEXT,
+  updated_at           TEXT,           -- when last set, for "updated N days ago"
+  contributed_override REAL,           -- optional manual correction to the running "contributed" total
+                                        -- as of this month (see §5c) — NULL means no correction, the
+                                        -- auto-computed sum of transactions is used as-is
   PRIMARY KEY (category, month)
 );
 
@@ -148,16 +151,20 @@ CREATE TABLE IF NOT EXISTS account_transactions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   ts          TEXT NOT NULL,
   txn_date    TEXT NOT NULL,   -- 'YYYY-MM-DD'
-  account     TEXT NOT NULL,   -- 'wallet' | 'credit'
+  account     TEXT NOT NULL,   -- 'wallet' | 'credit' | 'liquid'
   amount      REAL NOT NULL,   -- signed: + increases the account's balance-in-your-favor, - decreases
-  txn_kind    TEXT NOT NULL,   -- 'income' (wallet only) | 'settlement' (credit paid down from wallet)
+  txn_kind    TEXT NOT NULL,   -- 'income' (wallet only) | 'settlement' (credit paid down from wallet) |
+                                -- 'correction' (any account — a direct balance fix, see §5b)
   note        TEXT,
   raw_message TEXT,
   source      TEXT DEFAULT 'telegram'
 );
 ```
 
-**Default categories** (seed on first run; colors mirror the reference UI):
+**Default categories** (seed on first run; colors mirror the reference UI). "Investments" is
+no longer a seeded default — a fresh install starts with no saving-type category, since each
+user's real investment vehicles (a SIP, a gold plan, FDs, ...) are created directly from the
+Savings section's "+ Add investment" (§8/§5c) rather than repurposing one generic category:
 
 | name        | color     | expense_type | cadence | example keywords                     |
 |-------------|-----------|--------------|---------|---------------------------------------|
@@ -167,7 +174,6 @@ CREATE TABLE IF NOT EXISTS account_transactions (
 | Luxuries    | `#a855f7` | variable     | —       | gym, netflix, spotify, shopping       |
 | Health      | `#ef4444` | variable     | —       | pharmeasy, medicine, doctor, apollo   |
 | Travel      | `#06b6d4` | variable     | —       | ola, uber, metro, flight, fuel        |
-| Investments | `#eab308` | saving       | monthly | sip, index fund, stocks, mutual fund  |
 | Other       | `#64748b` | variable     | —       | (fallback bucket)                     |
 
 ### 5a. Expense tags: `expense_type` + `cadence`
@@ -257,28 +263,70 @@ prominent banner from that point (§8) and the Credit card carries an "unsettled
 
 `account_transactions` is deliberately separate from `transactions`: income and
 settlements aren't "expenses" in a category, they're account-level money movements.
-Liquid doesn't get its own ledger table — it's simpler to reuse the existing
-category/transaction mechanism (via `account_link`) since a liquid deposit already
-looks exactly like logging a `saving` transaction.
+Liquid's real deposits/withdrawals still go through the existing category/transaction
+mechanism (via `account_link`/`payment_source`) rather than a dedicated ledger, since a
+liquid deposit already looks exactly like logging a `saving` transaction — but Liquid
+*does* get rows in `account_transactions` for one purpose: balance corrections (below).
+
+**Balance corrections (any of the three accounts, any time):** `db.correct_wallet_balance()`
+/ `db.correct_credit_outstanding()` / `db.correct_liquid_balance()` (`/correct
+<wallet|credit|liquid> <amount>` / dashboard "✎" next to each balance in §8's Wallet &
+Accounts section) directly set an account to a known-correct balance — a **neutral
+correction**, not an income/settlement/deposit, for reconciling drift (most commonly:
+the account already held a balance before the user started tracking it in this app, or
+just fell out of sync with the real-world number over time). Each function computes
+whatever signed delta is needed and records it as a single `account_transactions` row
+with `txn_kind='correction'` — `get_wallet_balance()`/`get_liquid_balance()` already sum
+every row for their account regardless of kind, so a wallet/liquid correction needs no
+formula change; `get_credit_outstanding()`'s "settled" sum includes `txn_kind IN
+('settlement', 'correction')` so a credit correction folds in the same way a settlement
+does. The dashboard shows correction rows in a neutral color in the accounts ledger
+(§8), distinct from the green/red used for real income/spend, since a correction isn't
+either of those.
 
 ### 5c. Long-term investment vehicles (unaffected by the accounts rework)
 
 `investment_snapshots` powers **investment tracking, per vehicle**: since there's no
 way to pull real brokerage/mutual-fund values, the user manually logs each vehicle's
-total value once in a while (via `/portfolio <vehicle> <amount>` or the dashboard's
-per-vehicle "Update value" field) — every `expense_type='saving'` category *without* an
+total value once in a while (via `/portfolio <vehicle> <amount>` or the dashboard's ✎
+Adjust popup, see below) — every `expense_type='saving'` category *without* an
 `account_link` (i.e. a real investment vehicle, not a Liquid-linked deposit category)
 is tracked independently (its own cumulative contribution, its own value history, its
 own "updated N days ago"), since a user may run several vehicles (a SIP, a gold scheme,
 FDs) that shouldn't be conflated into one blended number. `server.py`'s `_is_vehicle()`
-is the single predicate for "is this a real vehicle" used everywhere (the Savings
-section's vehicle list, `/api/investments`, the Category Breakdown's savings-vehicle
-exclusion). The dashboard also shows a combined trend: cumulative contributed vs.
-summed value across vehicles, forward-filling each vehicle's last known value between
-updates (`GET /api/investments`) — the gap is gain or loss. The dashboard's
-`#vehicle-chart-select` dropdown re-points the same chart at a single vehicle's own
-`months` series instead of the combined one, and its per-vehicle "Update value"/chart
-controls only show for whichever vehicle is selected — not all of them stacked at once.
+is the single predicate for "is this a real vehicle" used everywhere (`/api/investments`,
+the Category Breakdown's savings-vehicle exclusion). The dashboard shows a combined
+trend: cumulative contributed vs. summed value across vehicles, forward-filling each
+vehicle's last known value between updates (`GET /api/investments`) — the gap is gain
+or loss. The dashboard's `#vehicle-chart-select` dropdown re-points the same chart at a
+single vehicle's own `months` series instead of the combined one.
+
+**The Savings section is chart-first — no per-vehicle list of boxes.** Earlier versions
+stacked a card per vehicle (contributed/value/gain/target-progress/an "update value"
+input) below the chart; once a user had more than one or two vehicles this read as
+clutter, so that list is gone. Instead: pick a vehicle from `#vehicle-chart-select` (or
+leave it on "Combined"), and a single line below the chart shows that selection's own
+stat (value vs. contributed, gain, "updated N days ago", target progress if any) — one
+line, not a box per vehicle. To correct a vehicle's numbers, tap **✎ Adjust** (or click
+directly on a point on the chart when a vehicle is selected) to open a small popup for
+one month at a time: it prefills that month's current value and contributed figures,
+you edit either or both, and saving re-renders the chart immediately — this is also the
+UI for the `contributed_override` fix below.
+
+**Backfilling pre-app contribution history (`contributed_override`):** the auto-computed
+"contributed" figure only sums transactions logged inside this app — a vehicle that
+already held money before the user started tracking it here would show a "contributed"
+total far below its real value, making the gain look artificially huge. The ✎ Adjust
+popup's "Total contributed as of this month" field lets the user correct this once (e.g.
+enter the vehicle's true contributed-to-date the first time they value it in the app);
+that number is stored as `investment_snapshots.contributed_override` for that
+(category, month), and every month's "contributed" figure from then on is
+`db._contributed_for_category_as_of()`: the most recent override at or before that
+month, plus whatever's been logged since — the same "baseline + delta since" shape
+`_vehicle_gain()` already uses for value, just applied to the contributed line too. A
+plain value update (`/portfolio`, or a ✎ Adjust save that leaves contributed unchanged)
+never wipes out a correction set elsewhere — `db.set_investment_snapshot()` only
+touches `contributed_override` when one is explicitly passed.
 
 A vehicle's **gain is incremental, never since-inception**: the app can't distinguish
 principal from interest inside a manually-entered value, so comparing a fresh value
@@ -291,15 +339,17 @@ created. A vehicle's first-ever snapshot has no previous to diff against, so `ga
 gain shows from next update" instead of fabricating a percentage. The combined
 `total_gain_pct` divides by the *summed baselines* of vehicles with a known gain, not
 by `total_contributed`, so it stays on the same scale as each vehicle's own `gain_pct`.
+This incremental-gain math is unaffected by `contributed_override` — gain is purely a
+value-to-value comparison, never derived from the contributed figure.
 
 A vehicle can optionally nest under another `expense_type='saving'` category via
-`parent_category` (e.g. a "Gold Reserve Plan" vehicle nested under "Investments") —
-purely organizational, shown as an indented row in both the Categories panel and the
-vehicle list; it doesn't affect that vehicle's own contribution/value/gain tracking,
-which stays fully independent. A vehicle can also carry an optional `target_amount` /
-`target_date` (set when adding it, or edited later via 🏷 Categories) — the vehicle list
-shows a progress bar (`target_progress_pct` = effective value ÷ target, capped at 999%)
-and the target date underneath.
+`parent_category` (e.g. a "Gold Reserve Plan" vehicle nested under a broader
+"Investments" vehicle the user created themselves) — purely organizational, shown as an
+indented row in the Categories panel and the vehicle-select dropdown; it doesn't affect
+that vehicle's own contribution/value/gain tracking, which stays fully independent. A
+vehicle can also carry an optional `target_amount` / `target_date` (set when adding it,
+or edited later via 🏷 Categories) — its stat line shows a progress percentage
+(`target_progress_pct` = effective value ÷ target, capped at 999%) and the target date.
 
 Both the top **Savings** card and the Savings section's vehicle total use the same
 "effective value" (`_savings_effective_balance()` in `server.py`): for each vehicle, the
@@ -422,9 +472,10 @@ user id (the bot is public once created; this keeps strangers from injecting dat
 | `/liquid <amount> [note]` | move money from the Wallet into the Liquid fund                  |
 | `/settle <amount>`  | pay down Credit from the Wallet (no arg = show outstanding)     |
 | `/wallet`           | Wallet/Credit/Liquid balances + payday settlement status       |
+| `/correct <wallet\|credit\|liquid> <amount>` | directly set an account's balance — a neutral correction, not income/spend (see §5b) |
 | `/salary <amount>`  | set the *reference* monthly income used for %-used displays (no arg = show current value) |
 | `/credit <amount>`  | set credit limit (no arg = show current value)                 |
-| `/portfolio <vehicle> <amount>` | log this month's value for one investment vehicle, e.g. `/portfolio Investments 150000` (no args = list all vehicles + when each was last updated) |
+| `/portfolio <vehicle> <amount>` | log this month's value for one investment vehicle, e.g. `/portfolio Gold Plan 150000` (no args = list all vehicles + when each was last updated) |
 | `/recap` (or `/recap refresh`) | AI day-by-day + cumulative analysis (see §9); cached once/day, `refresh` forces a new one |
 
 ---
@@ -503,14 +554,18 @@ CDNs are unreachable.
    data snapshot (never raw transactions) and a client-capped conversation history so
    token usage per call stays bounded through a long session.
 
-4. **Daily burn** — line chart: cumulative spend per day vs a straight dashed
-   even-pace reference line. A category dropdown (shared with §5's Month over month
-   chart) drills into a single category's cumulative burn instead of the whole month;
-   when filtered, the reference line uses that category's own `monthly_cap` (if any)
-   instead of wallet+credit. The y-axis is scaled off the pace-*so-far*
-   (`budget_per_day × days_elapsed`), not the full month's target — otherwise the
-   reference line (which ends at the full monthly total) dwarfs the real spend line
-   early in the month and it looks empty.
+4. **Daily burn** — two charts side by side: a **day-by-day** bar chart (that day's own
+   spend, not running) and a **cumulative** line chart, both fed by the same
+   `GET /api/daily-burn` series (`{day, amount, cumulative}` per day). No even-pace
+   reference line — it read as a fabricated target once fixed costs and one-off spend
+   made a flat daily pace meaningless, so both charts just show the real numbers. A
+   category dropdown (shared with §5's Month over month chart) drills into a single
+   category's burn instead of the whole month, and a **"Variable spend only"** option
+   filters to `expense_type='variable'` transactions across every category — the
+   routine day-to-day spend "cutting back" insights are actually about, with fixed
+   costs and one-off anomalies excluded. `?category=__variable__` is the sentinel both
+   `/api/daily-burn` and `/api/monthly` use for this (mapped to `expense_type='variable'`
+   server-side, not a real category name).
 
 5. **Month over month + Savings trend** — two bar charts side by side: total outflow
    for the last 6 months (current month highlighted, filterable by the same category
@@ -529,24 +584,30 @@ CDNs are unreachable.
    clash with the top Savings card and the Savings trend chart above). Each real
    investment-vehicle category (`expense_type='saving'`, no `account_link`) is an
    independent "vehicle" (a SIP, a gold plan, fixed deposits, ...). A combined line
-   chart shows cumulative contributed (computed automatically) vs. summed current value
-   across all vehicles (forward-filled between updates); a dropdown re-points the same
-   chart at a single vehicle's own history instead of the combined one. Below it, a
-   per-vehicle list shows each one's own contributed/value/gain, an optional
-   target-progress bar, and *"updated N days ago"* (amber if stale, >45 days) — but the
-   inline "update value" field and per-vehicle chart button only act on whichever
-   vehicle you've picked from the dropdown, instead of every vehicle's controls being
-   stacked and visible at once (this was the "doesn't look clean" clutter fixed this
-   round). "+ Add investment" opens a modal that creates a new `expense_type='saving'`
-   category, optionally nested under a parent and with a target amount/date.
+   chart shows cumulative contributed (computed automatically, honoring any
+   `contributed_override` — see §5c) vs. summed current value across all vehicles
+   (forward-filled between updates); a dropdown re-points the same chart at a single
+   vehicle's own history instead of the combined one. **Chart-first, no per-vehicle
+   boxes below it** — a single stat line under the chart reflects whatever's selected
+   (combined, or one vehicle's own contributed/value/gain/target-progress/staleness).
+   **✎ Adjust** (next to the dropdown, or a click directly on a chart point when a
+   vehicle is selected) opens a small popup to correct that vehicle's value and/or
+   contributed total for one month — the fix for a vehicle whose "contributed" figure
+   looks too low because it held money before the user started tracking it here. "+ Add
+   investment" opens a modal that creates a new `expense_type='saving'` category,
+   optionally nested under a parent and with a target amount/date. "Investments" is no
+   longer a seeded default category (§5) — vehicles are created directly here instead.
 
 8. **Wallet & Accounts** — the three account balances (Wallet/Credit/Liquid) as small
-   stat tiles, a "+ Add income" button (logs a Wallet deposit — salary, bonus,
-   freelance), a "💧 Add to Liquid" button (`db.deposit_to_liquid()` — moves money from
-   Wallet into Liquid), a "Settle credit" button (pays down Credit from Wallet), and a
-   recent ledger of `account_transactions` (income + settlements, colored green/red for
-   in/out). This is the wallet/accounts concept made visible and editable from the
-   dashboard, not just via Telegram commands.
+   stat tiles, each with a **✎** button that opens a "Correct balance" popup (see §5b) —
+   type the real balance directly, no need to think in +/- deltas; recorded as a neutral
+   correction, distinct from income/spend. Also a "+ Add income" button (logs a Wallet
+   deposit — salary, bonus, freelance), a "💧 Add to Liquid" button
+   (`db.deposit_to_liquid()` — moves money from Wallet into Liquid), a "Settle credit"
+   button (pays down Credit from Wallet), and a recent ledger of `account_transactions`
+   (income/settlements colored green/red for in/out; corrections shown in a neutral
+   tone, since they're neither). This is the wallet/accounts concept made visible and
+   editable from the dashboard, not just via Telegram commands.
 
 9. **Fixed & recurring expenses** — split by cadence: **Monthly fixed** shows only the
    latest logged instance of each distinct (category, note) pair tagged
@@ -563,16 +624,24 @@ CDNs are unreachable.
     progress bar. Bar is normal color when under, **red when over cap**. Show a
     `WATCH` tag near the cap, `ON TRACK` when comfortably under.
 
-11. **Recent activity** — table: Date · Category (colored dot) · Note · Payment source
-    (💰 Wallet / 💳 Credit / 💧 Liquid) · Amount · **✎ edit**. `expense_type='fixed'`
-    rows get a "📌 fixed" badge, `one-off` a "🎲 one-off" badge, `saving` a "📈 saving"
-    badge — each with its `cadence` alongside if one is set — next to the date.
-    Subtitle: "Latest entries logged from Telegram. Tap ✎ to edit." Most recent first.
-    The edit button opens a modal (category/note/amount/date/payment source/expense
-    type/cadence, all editable) that persists via `PUT /api/transactions/{id}`, plus a
-    Delete action via `DELETE /api/transactions/{id}` — this is the one place besides
-    `/cat` and `/undo` that can change an already-logged transaction, and unlike those
-    two bot commands it works on *any* past row, not just the most recent one.
+11. **Recent activity** — a free-text **quick-add** input above the table lets the user
+    log a new expense straight from the dashboard, e.g. `gym 1500` or `electricity bill
+    2200 credit fixed` — it's sent to `POST /api/transactions/quick-add`, which runs the
+    exact same `parser.parse_message()` the Telegram bot uses, so a dashboard-logged
+    expense gets identical category/payment-source/expense-type/cadence resolution (and
+    the same Gemini fallback if the category can't be resolved from keywords). Table
+    below it: Date · Category (colored dot) · Note · Payment source (💰 Wallet / 💳
+    Credit / 💧 Liquid) · Amount · **✎ edit**. `expense_type='fixed'` rows get a "📌
+    fixed" badge, `one-off` a "🎲 one-off" badge, `saving` a "📈 saving" badge — each
+    with its `cadence` alongside if one is set — next to the date. The table sits in a
+    fixed-height scrollable container (showing roughly the most recent 10 rows; older
+    ones are one scroll away, up to `GET /api/transactions`'s fetch limit) rather than
+    growing the page indefinitely. Most recent first. The edit button opens a modal
+    (category/note/amount/date/payment source/expense type/cadence, all editable) that
+    persists via `PUT /api/transactions/{id}`, plus a Delete action via `DELETE
+    /api/transactions/{id}` — this is the one place besides `/cat`, `/undo`, and the new
+    quick-add that can create or change a transaction from the dashboard directly,
+    without going through Telegram at all.
 
 12. **🏷 Categories panel** (modal) — add/edit/delete categories (color, expense_type,
     cadence, monthly cap) and their keyword aliases, backed by the
@@ -604,20 +673,22 @@ GET  /api/insights                       -> {today, insights, trends} — today'
 GET  /api/recap                          -> cached AI daily recap {lines, source, generated_at}
 POST /api/recap/refresh                  -> force-regenerate today's recap (bypasses cache)
 POST /api/chat                           -> chat assistant reply {message, history: [{role, text}], month} -> {reply, source} (see §9b)
-GET  /api/daily-burn                     -> [{day, cumulative}], plus reference-line params; ?category= to filter
-GET  /api/monthly                        -> last 6 months total outflow; ?category= to filter to one category
+GET  /api/daily-burn                     -> [{day, amount, cumulative}] per day; ?category= to filter to one category, or '__variable__' for variable-only spend across all categories
+GET  /api/monthly                        -> last 6 months total outflow; ?category= to filter to one category, or '__variable__' for variable-only
 GET  /api/savings                        -> last 6 months total for real investment-vehicle (expense_type='saving', no account_link) categories
 GET  /api/oneoff                         -> this month's expense_type='one-off' transactions + total (+ how much came from liquid)
 GET  /api/accounts                       -> {wallet_balance, credit_outstanding, credit_limit, credit_available, liquid_balance, payday, needs_settlement}
-GET  /api/accounts/transactions          -> income/settlement ledger; ?account=wallet|credit to filter
+GET  /api/accounts/transactions          -> income/settlement/correction ledger; ?account=wallet|credit|liquid to filter
 POST /api/accounts/income                -> log a Wallet deposit {amount, note, txn_date}
 POST /api/accounts/liquid-deposit        -> move money Wallet -> Liquid {amount, note, txn_date}
 POST /api/accounts/settle                -> pay down Credit from Wallet {amount, note, txn_date}
+POST /api/accounts/correct               -> directly set Wallet/Credit/Liquid to a known balance {account, new_balance, note, txn_date} — a neutral correction (see §5b)
 GET  /api/investments                    -> per-vehicle {vehicles: [...], combined_months, total_contributed, total_value, total_gain}
-POST /api/investments                    -> upsert {category, month, value, note} snapshot for one vehicle
+POST /api/investments                    -> upsert {category, month, value, note, contributed_override} snapshot for one vehicle (see §5c)
 GET  /api/recurring                      -> {monthly, yearly, monthly_total, yearly_total, monthly_equivalent_total}
 GET  /api/budgets                        -> [{category, cap, spent, status}]
 GET  /api/transactions                   -> recent rows for the activity table
+POST /api/transactions/quick-add         -> log a new transaction from the dashboard {message} — parsed via parser.parse_message(), same as a Telegram message
 PUT  /api/transactions/{id}              -> edit any field of a logged transaction (category/note/amount/payment_source/expense_type/cadence/spent_on)
 DEL  /api/transactions/{id}              -> delete a logged transaction
 GET  /api/categories                     -> categories with their keyword lists

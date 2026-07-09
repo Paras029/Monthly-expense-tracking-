@@ -99,6 +99,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/liquid <amount> [note] — move money from Wallet into your Liquid fund\n"
         "/settle <amount> — pay down Credit from your Wallet\n"
         "/wallet — wallet/credit/liquid balances + payday status\n"
+        "/correct <wallet|credit|liquid> <amount> — directly set an account's balance "
+        "(a neutral correction, not income/spend — for reconciling drift)\n"
         "/salary <amount> — set your reference monthly income (for %-used displays)\n"
         "/credit <amount> — set your credit limit\n"
         "/portfolio <vehicle> <amount> — log this month's value for one investment "
@@ -299,6 +301,34 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_correct(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    usage = "Usage: /correct <wallet|credit|liquid> <amount>, e.g. /correct wallet 42000"
+    if len(context.args) < 2:
+        await update.message.reply_text(usage)
+        return
+    account = context.args[0].lower()
+    if account not in ("wallet", "credit", "liquid"):
+        await update.message.reply_text(usage)
+        return
+    try:
+        new_balance = float(context.args[1].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text(usage)
+        return
+    if account == "wallet":
+        db.correct_wallet_balance(new_balance, source="telegram")
+        label, balance = "Wallet", db.get_wallet_balance()
+    elif account == "credit":
+        db.correct_credit_outstanding(new_balance, source="telegram")
+        label, balance = "Credit outstanding", db.get_credit_outstanding()
+    else:
+        db.correct_liquid_balance(new_balance, source="telegram")
+        label, balance = "Liquid fund", db.get_liquid_balance()
+    await update.message.reply_text(f"✎ {label} corrected to {_fmt_amount(balance)}.")
+
+
 async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_allowed(update):
         return
@@ -407,6 +437,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("liquid", cmd_liquid))
     app.add_handler(CommandHandler("settle", cmd_settle))
     app.add_handler(CommandHandler("wallet", cmd_wallet))
+    app.add_handler(CommandHandler("correct", cmd_correct))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
     app.add_handler(CommandHandler("recap", cmd_recap))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

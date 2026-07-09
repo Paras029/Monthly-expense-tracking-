@@ -30,7 +30,6 @@ DEFAULT_CATEGORIES = {
     "Luxuries":    {"color": "#a855f7", "expense_type": "variable", "cadence": None,      "monthly_cap": None},
     "Health":      {"color": "#ef4444", "expense_type": "variable", "cadence": None,      "monthly_cap": None},
     "Travel":      {"color": "#06b6d4", "expense_type": "variable", "cadence": None,      "monthly_cap": None},
-    "Investments": {"color": "#eab308", "expense_type": "saving",   "cadence": "monthly", "monthly_cap": None},
     "Other":       {"color": "#64748b", "expense_type": "variable", "cadence": None,      "monthly_cap": None},
 }
 
@@ -59,9 +58,6 @@ CATEGORY_KEYWORDS = {
     "Travel": [
         "ola", "uber", "metro", "flight", "fuel", "petrol", "diesel",
         "cab", "train", "irctc", "oyo", "hotel",
-    ],
-    "Investments": [
-        "sip", "index fund", "stocks", "mutual fund", "mf", "nps", "ppf",
     ],
     "Other": [],
 }

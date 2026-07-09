@@ -44,13 +44,26 @@ def call_gemini(prompt, temperature=0.0, contents=None):
         headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
         json={
             "contents": payload_contents,
-            "generationConfig": {"temperature": temperature},
+            "generationConfig": {
+                "temperature": temperature,
+                # Gemini 3.x models default to 'medium' thinking effort, which
+                # adds meaningful latency for no benefit on these simple
+                # classification/chat tasks — 'low' keeps calls fast and
+                # comfortably inside the timeout below. Ignored harmlessly by
+                # older (2.x) model families that don't support it.
+                "thinkingConfig": {"thinkingLevel": "low"},
+            },
         },
-        timeout=20,
+        timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    candidates = data.get("candidates") or []
+    if not candidates:
+        # e.g. blocked by a safety filter — data still has a
+        # promptFeedback/finishReason worth surfacing instead of a bare KeyError
+        raise ValueError(f"Gemini returned no candidates: {data.get('promptFeedback', data)}")
+    return candidates[0]["content"]["parts"][0]["text"]
 
 
 def extract_amount(message):

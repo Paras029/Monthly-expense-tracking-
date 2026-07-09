@@ -1,6 +1,8 @@
 """FastAPI app: JSON API for the dashboard + serves the static index.html.
-Only the category/keyword/settings/transaction-edit endpoints write to the
-DB — new transactions are still only ever created by the Telegram bot."""
+New transactions can be created either by the Telegram bot or, via the
+quick-add endpoint below, directly from the dashboard — both go through the
+same parser.parse_message() so a dashboard-logged expense is parsed
+identically to a Telegram one."""
 import io
 from datetime import date, datetime
 from typing import Optional
@@ -15,6 +17,7 @@ import chat
 import db
 import export
 import insights
+import parser
 
 app = FastAPI(title="Personal Cashflow Ledger")
 
@@ -224,7 +227,10 @@ def api_chat(body: ChatIn):
 def api_daily_burn(month: str = Query(default=None), category: str = Query(default=None)):
     month = month or _current_month()
     txns = db.get_transactions_for_month(month)
-    if category:
+    variable_only = category == "__variable__"
+    if variable_only:
+        txns = [t for t in txns if t["expense_type"] == "variable"]
+    elif category:
         txns = [t for t in txns if t["category"] == category]
     m = insights.compute_metrics(month)
 
@@ -233,29 +239,17 @@ def api_daily_burn(month: str = Query(default=None), category: str = Query(defau
         day = int(t["spent_on"].split("-")[2])
         daily_totals[day] = daily_totals.get(day, 0.0) + t["amount"]
 
-    cumulative = []
+    series = []
     running = 0.0
     for day in range(1, m["days_total"] + 1):
-        running += daily_totals.get(day, 0.0)
-        cumulative.append({"day": day, "cumulative": running})
-
-    if category:
-        # a single category has no salary/credit-wide target — fall back to
-        # its own monthly cap (if one is set) as the pace reference instead.
-        cat_row = next((c for c in db.get_categories() if c["name"] == category), None)
-        cap = cat_row["monthly_cap"] if cat_row else None
-        per_day_budget = (cap / m["days_total"]) if cap and m["days_total"] else None
-        budget = cap
-    else:
-        per_day_budget = (m["budget"] / m["days_total"]) if m["days_total"] else 0.0
-        budget = m["budget"]
+        amount = daily_totals.get(day, 0.0)
+        running += amount
+        series.append({"day": day, "amount": amount, "cumulative": running})
 
     return {
         "month": month,
         "category": category,
-        "series": cumulative,
-        "budget_per_day": per_day_budget,
-        "budget": budget,
+        "series": series,
     }
 
 
@@ -263,6 +257,8 @@ def api_daily_burn(month: str = Query(default=None), category: str = Query(defau
 def api_monthly(month: str = Query(default=None), category: str = Query(default=None)):
     month = month or _current_month()
     months = _last_n_months(6, month)
+    if category == "__variable__":
+        return {"months": db.get_monthly_totals(months, expense_type="variable")}
     return {"months": db.get_monthly_totals(months, category=category)}
 
 
@@ -327,8 +323,8 @@ def api_accounts():
 
 @app.get("/api/accounts/transactions")
 def api_account_transactions(account: str = Query(default=None), limit: int = Query(default=30)):
-    if account and account not in ("wallet", "credit"):
-        raise HTTPException(400, "account must be 'wallet' or 'credit'")
+    if account and account not in ("wallet", "credit", "liquid"):
+        raise HTTPException(400, "account must be 'wallet', 'credit', or 'liquid'")
     return {"transactions": db.get_account_transactions(account=account, limit=limit)}
 
 
@@ -379,6 +375,35 @@ def api_liquid_deposit(body: LiquidDepositIn):
         raise HTTPException(400, "amount must be positive")
     txn_id = db.deposit_to_liquid(body.amount, note=body.note, spent_on=body.txn_date, source="dashboard")
     return {"ok": True, "id": txn_id, "wallet_balance": db.get_wallet_balance(), "liquid_balance": db.get_liquid_balance()}
+
+
+class AccountCorrectionIn(BaseModel):
+    account: str  # 'wallet' | 'credit' | 'liquid'
+    new_balance: float
+    note: Optional[str] = None
+    txn_date: Optional[str] = None
+
+
+@app.post("/api/accounts/correct")
+def api_correct_account_balance(body: AccountCorrectionIn):
+    """Directly set Wallet/Credit/Liquid to a known-correct balance — a
+    neutral correction, not an income/settlement/deposit, for reconciling
+    drift (e.g. the account already had a balance before this app was set
+    up to track it). Handy any time, not just once at setup."""
+    if body.account == "wallet":
+        db.correct_wallet_balance(body.new_balance, note=body.note, txn_date=body.txn_date, source="dashboard")
+    elif body.account == "credit":
+        db.correct_credit_outstanding(body.new_balance, note=body.note, txn_date=body.txn_date, source="dashboard")
+    elif body.account == "liquid":
+        db.correct_liquid_balance(body.new_balance, note=body.note, txn_date=body.txn_date, source="dashboard")
+    else:
+        raise HTTPException(400, "account must be 'wallet', 'credit', or 'liquid'")
+    return {
+        "ok": True,
+        "wallet_balance": db.get_wallet_balance(),
+        "credit_outstanding": db.get_credit_outstanding(),
+        "liquid_balance": db.get_liquid_balance(),
+    }
 
 
 def _vehicle_gain(category, as_of_month):
@@ -505,6 +530,11 @@ class InvestmentSnapshotIn(BaseModel):
     month: str
     value: float
     note: Optional[str] = None
+    # Manual correction to the running "contributed" total as of `month` —
+    # lets a user back-fill money a vehicle already held before they started
+    # tracking it in this app (see db.set_investment_snapshot). Omit to leave
+    # any existing correction untouched.
+    contributed_override: Optional[float] = None
 
 
 @app.post("/api/investments")
@@ -514,7 +544,9 @@ def api_add_investment_snapshot(body: InvestmentSnapshotIn):
         raise HTTPException(404, f"Category {body.category!r} not found")
     if not _is_vehicle(categories[body.category]):
         raise HTTPException(400, f"{body.category!r} is not an investment vehicle")
-    updated_at = db.set_investment_snapshot(body.category, body.month, body.value, body.note)
+    updated_at = db.set_investment_snapshot(
+        body.category, body.month, body.value, body.note, body.contributed_override
+    )
     return {"ok": True, "updated_at": updated_at}
 
 
@@ -553,6 +585,35 @@ def api_transactions(month: str = Query(default=None), limit: int = Query(defaul
     month = month or _current_month()
     txns = db.get_transactions_for_month(month)
     return {"month": month, "transactions": txns[:limit]}
+
+
+class QuickAddIn(BaseModel):
+    message: str
+
+
+@app.post("/api/transactions/quick-add")
+def api_quick_add_transaction(body: QuickAddIn):
+    """Log a new transaction straight from the dashboard, parsed exactly the
+    same way a Telegram message would be — same regex-first parser, same
+    Gemini fallback, just a different source label."""
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(400, "message cannot be empty")
+    result = parser.parse_message(message)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    txn_id = db.insert_transaction(
+        category=result["category"],
+        note=result["note"],
+        amount=result["amount"],
+        raw_message=message,
+        source="dashboard",
+        guessed=result["guessed"],
+        payment_source=result["payment_source"],
+        expense_type=result["expense_type"],
+        cadence=result["cadence"],
+    )
+    return {"ok": True, "id": txn_id, **result}
 
 
 VALID_PAYMENT_SOURCES = {"wallet", "credit", "liquid"}

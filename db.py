@@ -45,11 +45,16 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 CREATE TABLE IF NOT EXISTS investment_snapshots (
-  category   TEXT NOT NULL,  -- an expense_type='saving' category name — each is its own "vehicle"
-  month      TEXT NOT NULL,  -- 'YYYY-MM'
-  value      REAL NOT NULL,  -- total value of this vehicle as of this month (manually entered)
-  note       TEXT,
-  updated_at TEXT,           -- when this snapshot was last set, for "updated N days ago"
+  category            TEXT NOT NULL,  -- an expense_type='saving' category name — each is its own "vehicle"
+  month               TEXT NOT NULL,  -- 'YYYY-MM'
+  value               REAL NOT NULL,  -- total value of this vehicle as of this month (manually entered)
+  note                TEXT,
+  updated_at          TEXT,           -- when this snapshot was last set, for "updated N days ago"
+  contributed_override REAL,          -- optional manual correction to the running "contributed" total as
+                                       -- of this month (see get_cumulative_savings_contributions) — lets a
+                                       -- user back-fill money put into a vehicle before they started using
+                                       -- this app, which the auto-computed sum-of-transactions figure can
+                                       -- never see. NULL means no correction; auto-computed sum is used.
   PRIMARY KEY (category, month)
 );
 
@@ -64,9 +69,10 @@ CREATE TABLE IF NOT EXISTS account_transactions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   ts          TEXT NOT NULL,
   txn_date    TEXT NOT NULL,   -- 'YYYY-MM-DD'
-  account     TEXT NOT NULL,   -- 'wallet' | 'credit'
+  account     TEXT NOT NULL,   -- 'wallet' | 'credit' | 'liquid'
   amount      REAL NOT NULL,   -- signed: + increases the account's balance-in-your-favor, - decreases
-  txn_kind    TEXT NOT NULL,   -- 'income' (wallet only) | 'settlement' (credit paid down from wallet)
+  txn_kind    TEXT NOT NULL,   -- 'income' (wallet only) | 'settlement' (credit paid down from wallet) |
+                                -- 'correction' (any account — a direct balance fix, see correct_*_balance)
   note        TEXT,
   raw_message TEXT,
   source      TEXT DEFAULT 'telegram'
@@ -87,6 +93,10 @@ CATEGORY_MIGRATIONS = {
     "expense_type": "TEXT DEFAULT 'variable'",
     "cadence": "TEXT",
     "account_link": "TEXT",
+}
+
+INVESTMENT_SNAPSHOT_MIGRATIONS = {
+    "contributed_override": "REAL",
 }
 
 
@@ -259,6 +269,13 @@ def _migrate_investment_snapshots(conn):
     conn.execute("DROP TABLE investment_snapshots_old")
 
 
+def _migrate_investment_snapshot_columns(conn):
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(investment_snapshots)")}
+    for column, decl in INVESTMENT_SNAPSHOT_MIGRATIONS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE investment_snapshots ADD COLUMN {column} {decl}")
+
+
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
@@ -270,6 +287,7 @@ def init_db():
         _migrate_categories(conn)
         _migrate_bills_to_fixed(conn)
         _migrate_investment_snapshots(conn)
+        _migrate_investment_snapshot_columns(conn)
 
         for name, meta in config.DEFAULT_CATEGORIES.items():
             conn.execute(
@@ -459,38 +477,51 @@ def get_monthly_totals(months, expense_type=None, category=None):
         return out
 
 
+def _contributed_for_category_as_of(category, month):
+    """A vehicle's running 'contributed' total as of `month`: the manual
+    contributed_override at or before this month (if one was ever set),
+    plus whatever's been logged since — or, absent any override, the plain
+    all-time sum of the vehicle's transactions. The override exists because
+    the auto-computed sum only sees transactions logged through this app; a
+    vehicle that already held money before the user started tracking it
+    here needs a way to back-fill that pre-app principal (see set_investment_snapshot)."""
+    override = get_contributed_override_as_of(category, month)
+    if override:
+        since = get_contributions_between(category, override["month"], month)
+        return override["contributed_override"] + since
+    return get_contributions_between(category, None, month)
+
+
 def get_cumulative_savings_contributions(months, category=None):
     """Returns [{month, contributed}] where contributed is the all-time
     running total through the end of that month (not just that month's own
     contribution) — of real investment-vehicle transactions (expense_type=
     'saving', account_link IS NULL — excludes liquid-linked saving
     categories), or of one category's transactions if `category` is given
-    (for a single investment vehicle)."""
-    with get_conn() as conn:
-        out = []
-        for month in months:
-            if category:
-                row = conn.execute(
-                    "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions "
-                    "WHERE category = ? AND spent_on <= ?",
-                    (category, f"{month}-31"),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT COALESCE(SUM(t.amount), 0) AS total FROM transactions t "
-                    "JOIN categories c ON c.name = t.category "
-                    "WHERE t.expense_type = 'saving' AND c.account_link IS NULL AND t.spent_on <= ?",
-                    (f"{month}-31",),
-                ).fetchone()
-            out.append({"month": month, "contributed": row["total"]})
-        return out
+    (for a single investment vehicle). Honors each vehicle's own manual
+    contributed_override, if any (see _contributed_for_category_as_of)."""
+    if category:
+        categories_to_sum = [category]
+    else:
+        with get_conn() as conn:
+            categories_to_sum = [
+                row["name"] for row in conn.execute(
+                    "SELECT name FROM categories WHERE expense_type = 'saving' AND account_link IS NULL"
+                )
+            ]
+    out = []
+    for month in months:
+        total = sum(_contributed_for_category_as_of(cat, month) for cat in categories_to_sum)
+        out.append({"month": month, "contributed": total})
+    return out
 
 
 def get_liquid_balance(through_month=None):
     """Liquid account balance: cumulative deposits into account_link='liquid'
     saving categories, minus cumulative expenses paid *from* the liquid
     account (payment_source='liquid' — e.g. a one-off anomaly drawn from
-    it), optionally only counting through the end of a given month. Carries
+    it), plus any direct balance corrections (see correct_liquid_balance),
+    optionally only counting through the end of a given month. Carries
     forward automatically since it's a running sum, not a monthly reset."""
     with get_conn() as conn:
         date_clause = " AND spent_on <= ?" if through_month else ""
@@ -506,7 +537,13 @@ def get_liquid_balance(through_month=None):
             f"WHERE payment_source = 'liquid'{date_clause}",
             params,
         ).fetchone()["total"]
-        return deposits - withdrawals
+        date_clause2 = " AND txn_date <= ?" if through_month else ""
+        corrections = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM account_transactions "
+            f"WHERE account = 'liquid' AND txn_kind = 'correction'{date_clause2}",
+            params,
+        ).fetchone()["total"]
+        return deposits - withdrawals + corrections
 
 
 DEFAULT_LIQUID_CATEGORY = "Liquid Fund"
@@ -800,10 +837,41 @@ def get_credit_outstanding(through_month=None):
         date_clause2 = " AND txn_date <= ?" if through_month else ""
         settled = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) AS total FROM account_transactions "
-            f"WHERE account = 'credit' AND txn_kind = 'settlement'{date_clause2}",
+            f"WHERE account = 'credit' AND txn_kind IN ('settlement', 'correction'){date_clause2}",
             params,
         ).fetchone()["total"]
         return charged - settled
+
+
+# ---- direct balance corrections (Wallet/Credit/Liquid) --------------------
+#
+# A correction is a neutral "set the balance to X" action, distinct from an
+# income/settlement/deposit — it doesn't represent money actually moving, just
+# fixing drift between what the app has tracked and the real-world balance
+# (e.g. after starting to use the app partway through an account's history).
+# Each function computes the signed delta needed and records it the same way
+# an income/settlement would, so it carries forward through the normal
+# balance queries above with no special-casing at read time.
+
+def correct_wallet_balance(new_balance, note=None, txn_date=None, source="dashboard"):
+    delta = new_balance - get_wallet_balance()
+    return add_account_transaction("wallet", delta, "correction", note=note or "Balance correction",
+                                    txn_date=txn_date, source=source)
+
+
+def correct_credit_outstanding(new_outstanding, note=None, txn_date=None, source="dashboard"):
+    # settled/corrections are subtracted from charged (see get_credit_outstanding), so
+    # the delta needed to land on new_outstanding is the current outstanding minus it —
+    # the opposite sign of a plain "new - current" balance delta.
+    delta = get_credit_outstanding() - new_outstanding
+    return add_account_transaction("credit", delta, "correction", note=note or "Balance correction",
+                                    txn_date=txn_date, source=source)
+
+
+def correct_liquid_balance(new_balance, note=None, txn_date=None, source="dashboard"):
+    delta = new_balance - get_liquid_balance()
+    return add_account_transaction("liquid", delta, "correction", note=note or "Balance correction",
+                                    txn_date=txn_date, source=source)
 
 
 # ---- investment snapshots (long-term, per-vehicle portfolio tracking) ----
@@ -878,18 +946,37 @@ def get_contributions_between(category, after_month_exclusive, through_month_inc
         return row["total"]
 
 
-def set_investment_snapshot(category, month, value, note=None):
-    """Returns the updated_at timestamp that was written."""
+def set_investment_snapshot(category, month, value, note=None, contributed_override=None):
+    """Returns the updated_at timestamp that was written. `contributed_override`
+    is optional and, when omitted (None), preserves whatever override was
+    already set for this (category, month) — a plain value update (e.g. the
+    bot's /portfolio command) never wipes out a correction made elsewhere."""
     updated_at = datetime.now().isoformat(timespec="seconds")
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO investment_snapshots (category, month, value, note, updated_at) "
-            "VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO investment_snapshots (category, month, value, note, contributed_override, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(category, month) DO UPDATE SET value = excluded.value, "
-            "note = excluded.note, updated_at = excluded.updated_at",
-            (category, month, value, note, updated_at),
+            "note = excluded.note, "
+            "contributed_override = COALESCE(excluded.contributed_override, investment_snapshots.contributed_override), "
+            "updated_at = excluded.updated_at",
+            (category, month, value, note, contributed_override, updated_at),
         )
     return updated_at
+
+
+def get_contributed_override_as_of(category, month):
+    """The most recent manual 'contributed' correction at or before `month`,
+    or None if the vehicle has never had one set (in which case the plain
+    sum-of-transactions figure is used as-is)."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT month, contributed_override FROM investment_snapshots "
+            "WHERE category = ? AND month <= ? AND contributed_override IS NOT NULL "
+            "ORDER BY month DESC LIMIT 1",
+            (category, month),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 # ---- AI daily recap (cached, at most once/day unless force-refreshed) ----

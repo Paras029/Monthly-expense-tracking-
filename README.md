@@ -60,6 +60,11 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
   logged income, not this number.
 - **View the dashboard:** open `http://localhost:8000` on the tablet, or
   `http://<tablet-lan-ip>:8000` from a phone on the same wifi.
+- **Log an expense from the dashboard too:** the Recent Activity section has a quick-add
+  box that works exactly like messaging the bot — type `gym 1500` and hit Log.
+- **Correct an account balance:** tap ✎ next to Wallet/Credit/Liquid in the Wallet &
+  Accounts section (or `/correct wallet 42000` on the bot) to set the real balance
+  directly — recorded as a neutral correction, not income or spend.
 - **Manage categories:** use the 🏷 Categories panel on the dashboard to
   add/edit/delete categories, colors, default type/cadence, monthly caps, and
   keyword aliases — no code editing needed. A `saving`-type category can
@@ -69,10 +74,12 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
   row in Recent Activity — change its category, note, amount, date, payment
   source, or type/cadence tags, or delete it outright.
 - **Track multiple investments:** add a vehicle from the Savings section (or
-  🏷 Categories, type `saving`) and update each one's current value
-  independently — the dashboard shows how long ago each was last updated,
-  and a dropdown lets you view a single vehicle's own chart instead of the
-  combined one.
+  🏷 Categories, type `saving`) and update each one's current value and
+  contributed total via the ✎ Adjust popup (or click a point on the chart once
+  a vehicle is selected) — a dropdown lets you view a single vehicle's own
+  chart instead of the combined one. If a vehicle already held money before
+  you started tracking it here, use ✎ Adjust to correct its "contributed"
+  figure so gains aren't overstated.
 - **Export your data:** the ⬇ Export button in the dashboard header downloads
   a full-history Excel workbook (transactions, monthly summary, category
   breakdown, accounts ledger, investment history) for offline analysis.
@@ -88,8 +95,9 @@ Telegram bot (long-polling) and the FastAPI dashboard together.
   section instead of being scattered across the page.
 - **Bot commands:** `/start`, `/undo`, `/cat <Category>`, `/today`, `/month`,
   `/insights`, `/income <amount> [note]`, `/liquid <amount> [note]`,
-  `/settle <amount>`, `/wallet`, `/salary <amount>`, `/credit <amount>`,
-  `/portfolio <vehicle> <amount>`, `/recap`.
+  `/settle <amount>`, `/wallet`, `/correct <wallet|credit|liquid> <amount>`,
+  `/salary <amount>`, `/credit <amount>`, `/portfolio <vehicle> <amount>`,
+  `/recap`.
 
 ## Without a Telegram bot token
 

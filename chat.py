@@ -8,12 +8,15 @@ conversation history so token usage per call doesn't grow unbounded over a
 long chat session.
 """
 import json
+import logging
 from datetime import date
 
 import config
 import db
 import insights
 import parser
+
+logger = logging.getLogger(__name__)
 
 MAX_HISTORY_TURNS = 8  # user+model pairs kept per request
 
@@ -119,16 +122,16 @@ def chat_reply(history, user_message, month=None):
     if not config.GEMINI_API_KEY:
         return {"reply": UNAVAILABLE_REPLY, "source": "unavailable"}
 
-    month = month or date.today().strftime("%Y-%m")
-    data_context = _gather_financial_context(month)
-    contents = _build_contents(history[-MAX_HISTORY_TURNS * 2:], user_message, data_context)
-
     try:
+        month = month or date.today().strftime("%Y-%m")
+        data_context = _gather_financial_context(month)
+        contents = _build_contents(history[-MAX_HISTORY_TURNS * 2:], user_message, data_context)
         reply = parser.call_gemini(None, temperature=0.4, contents=contents)
         if not reply or not reply.strip():
             raise ValueError("empty response from Gemini")
         return {"reply": reply.strip(), "source": "ai"}
     except Exception:
+        logger.exception("chat_reply failed")
         return {
             "reply": "Sorry, I couldn't reach the assistant right now — try again in a moment.",
             "source": "error",
