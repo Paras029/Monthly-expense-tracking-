@@ -406,23 +406,19 @@ def api_correct_account_balance(body: AccountCorrectionIn):
     }
 
 
-def _vehicle_gain(category, as_of_month):
-    """Incremental gain: new value vs. (previous snapshot's value + whatever
-    was actually contributed between the two snapshots) — not vs. all-time
-    contributed, which overstates gain the moment a vehicle has any history
-    the app didn't track (or simply hasn't been re-valued in a while).
-    Returns (gain, gain_pct, baseline) — all None if there's no previous
-    snapshot to compare against (the first-ever value just sets a baseline,
-    it isn't a "gain")."""
-    prev = db.get_previous_snapshot_before(category, as_of_month)
-    if not prev:
-        return None, None, None
-    as_of = db.get_snapshot_as_of(category, as_of_month)
-    contributed_between = db.get_contributions_between(category, prev["month"], as_of_month)
-    baseline = prev["value"] + contributed_between
-    gain = as_of["value"] - baseline
-    gain_pct = (gain / baseline * 100) if baseline else None
-    return gain, gain_pct, baseline
+def _vehicle_gain(latest_value, contributed):
+    """Gain is a plain value-vs-contributed comparison: how much more (or
+    less) a vehicle is worth than the total that's actually gone into it.
+    `contributed` already honors any contributed_override (see §5c in
+    CLAUDE.md), which is what makes this comparison meaningful even for a
+    vehicle that held money before the app started tracking it — without
+    that correction this same math would previously have fabricated a huge
+    gain. Returns (gain, gain_pct) — both None if no value has been set yet."""
+    if latest_value is None:
+        return None, None
+    gain = latest_value - contributed
+    gain_pct = (gain / contributed * 100) if contributed else None
+    return gain, gain_pct
 
 
 @app.get("/api/investments")
@@ -431,13 +427,12 @@ def api_investments(month: str = Query(default=None), n: int = Query(default=12)
     category (SIP, a gold plan, FDs — expense_type='saving' and not linked
     to the Liquid account) is tracked independently — its own automatically-
     computed cumulative contribution, its own manually-updated current
-    value, and how long ago that value was last updated. Gain is incremental
-    (see _vehicle_gain) — never a since-inception comparison against
-    all-time contributed, which is misleading for a vehicle with any
-    pre-existing history. "Effective value" (the manually-set value if one
-    exists as of this month, else contributed-to-date as a floor estimate)
-    feeds both the combined chart and the top Savings card, so updating a
-    vehicle's value immediately updates the top-level figure too."""
+    value, and how long ago that value was last updated. Gain is current
+    value vs. contributed (see _vehicle_gain). "Effective value" (the
+    manually-set value if one exists as of this month, else contributed-to-
+    date as a floor estimate) feeds both the combined chart and the top
+    Savings card, so updating a vehicle's value immediately updates the
+    top-level figure too."""
     month = month or _current_month()
     months = _last_n_months(n, month)
     saving_categories = [c for c in db.get_categories() if _is_vehicle(c)]
@@ -470,9 +465,7 @@ def api_investments(month: str = Query(default=None), n: int = Query(default=12)
         if updated_at:
             updated_days_ago = (date.today() - datetime.fromisoformat(updated_at).date()).days
 
-        gain, gain_pct, baseline = None, None, None
-        if latest_snapshot:
-            gain, gain_pct, baseline = _vehicle_gain(name, latest_snapshot["month"])
+        gain, gain_pct = _vehicle_gain(latest_value, latest_contributed)
 
         target_progress = None
         if cat["target_amount"]:
@@ -493,7 +486,6 @@ def api_investments(month: str = Query(default=None), n: int = Query(default=12)
             "target_date": cat["target_date"],
             "target_progress_pct": target_progress,
             "months": vehicle_months,
-            "_baseline": baseline,
         })
 
     vehicles.sort(key=lambda v: -v["contributed"])
@@ -504,16 +496,13 @@ def api_investments(month: str = Query(default=None), n: int = Query(default=12)
     ]
     total_contributed = combined_contributed[months[-1]] if months else 0.0
     total_value = combined_effective_value[months[-1]] if months else 0.0
+    # Sum each vehicle's own gain directly, rather than diffing the combined
+    # totals above — those blend in contributed-as-floor for any vehicle
+    # that's never had a value set, which would understate the real ratio.
     known_gains = [v["gain"] for v in vehicles if v["gain"] is not None]
     total_gain = sum(known_gains) if known_gains else None
-    # Aggregate % must be on the same scale as each vehicle's own gain_pct: gain
-    # over the *baseline* (prev value + contributions since), not total_contributed
-    # (all-time contributed), which would understate/overstate the real ratio.
-    known_baselines = [v["_baseline"] for v in vehicles if v["_baseline"] is not None]
-    total_baseline = sum(known_baselines) if known_baselines else 0.0
-    total_gain_pct = (total_gain / total_baseline * 100) if total_gain is not None and total_baseline else None
-    for v in vehicles:
-        del v["_baseline"]
+    known_contributed = sum(v["contributed"] for v in vehicles if v["gain"] is not None)
+    total_gain_pct = (total_gain / known_contributed * 100) if total_gain is not None and known_contributed else None
 
     return {
         "vehicles": vehicles,

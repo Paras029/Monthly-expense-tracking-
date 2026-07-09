@@ -322,25 +322,22 @@ enter the vehicle's true contributed-to-date the first time they value it in the
 that number is stored as `investment_snapshots.contributed_override` for that
 (category, month), and every month's "contributed" figure from then on is
 `db._contributed_for_category_as_of()`: the most recent override at or before that
-month, plus whatever's been logged since — the same "baseline + delta since" shape
-`_vehicle_gain()` already uses for value, just applied to the contributed line too. A
-plain value update (`/portfolio`, or a ✎ Adjust save that leaves contributed unchanged)
-never wipes out a correction set elsewhere — `db.set_investment_snapshot()` only
-touches `contributed_override` when one is explicitly passed.
+month, plus whatever's been logged since. A plain value update (`/portfolio`, or a ✎
+Adjust save that leaves contributed unchanged) never wipes out a correction set
+elsewhere — `db.set_investment_snapshot()` only touches `contributed_override` when one
+is explicitly passed.
 
-A vehicle's **gain is incremental, never since-inception**: the app can't distinguish
-principal from interest inside a manually-entered value, so comparing a fresh value
-against all-time contributed fabricates a huge "gain" the moment a vehicle has any
-pre-existing balance the app never logged. `_vehicle_gain()` in `server.py` instead
-computes `gain = new_value − (previous_snapshot_value + contributions_since_that_snapshot)`
-— the real change since the *last* time this vehicle was valued, not since it was
-created. A vehicle's first-ever snapshot has no previous to diff against, so `gain`/
-`gain_pct` are `None` (a baseline, not a "gain") — the UI shows "first recorded value —
-gain shows from next update" instead of fabricating a percentage. The combined
-`total_gain_pct` divides by the *summed baselines* of vehicles with a known gain, not
-by `total_contributed`, so it stays on the same scale as each vehicle's own `gain_pct`.
-This incremental-gain math is unaffected by `contributed_override` — gain is purely a
-value-to-value comparison, never derived from the contributed figure.
+A vehicle's **gain is a plain value-vs-contributed comparison**: `_vehicle_gain()` in
+`server.py` computes `gain = latest_value − contributed`, `gain_pct = gain ÷ contributed`
+— nothing incremental, no snapshot-to-snapshot diffing. This is only meaningful because
+`contributed` already honors `contributed_override` above; without that correction this
+same subtraction would fabricate a huge "gain" the moment a vehicle has any pre-existing
+balance the app never logged, which is why the two features go together. `gain`/
+`gain_pct` are `None` only when the vehicle has never had a value set at all (nothing to
+compare against yet). The combined `total_gain`/`total_gain_pct` sum each vehicle's own
+gain and contributed directly (only across vehicles with a known gain), rather than
+diffing the combined chart totals — those blend in contributed-as-a-floor-estimate for
+any vehicle that's never had a value set, which would understate the real ratio.
 
 A vehicle can optionally nest under another `expense_type='saving'` category via
 `parent_category` (e.g. a "Gold Reserve Plan" vehicle nested under a broader
@@ -554,11 +551,12 @@ CDNs are unreachable.
    data snapshot (never raw transactions) and a client-capped conversation history so
    token usage per call stays bounded through a long session.
 
-4. **Daily burn** — two charts side by side: a **day-by-day** bar chart (that day's own
-   spend, not running) and a **cumulative** line chart, both fed by the same
-   `GET /api/daily-burn` series (`{day, amount, cumulative}` per day). No even-pace
+4. **Daily burn** — one combo chart: a **day-by-day** bar (that day's own spend, not
+   running) plus a **cumulative** line on a second y-axis, both fed by the same
+   `GET /api/daily-burn` series (`{day, amount, cumulative}` per day) and sharing one
+   x-axis so the two read together instead of as separate charts. No even-pace
    reference line — it read as a fabricated target once fixed costs and one-off spend
-   made a flat daily pace meaningless, so both charts just show the real numbers. A
+   made a flat daily pace meaningless, so the chart just shows the real numbers. A
    category dropdown (shared with §5's Month over month chart) drills into a single
    category's burn instead of the whole month, and a **"Variable spend only"** option
    filters to `expense_type='variable'` transactions across every category — the

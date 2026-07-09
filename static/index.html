@@ -255,16 +255,7 @@
         <option value="">All categories</option>
       </select>
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <div>
-        <p class="text-[11px] text-muted uppercase tracking-wider mb-2">Day by day</p>
-        <div class="h-56"><canvas id="burn-daily-chart"></canvas></div>
-      </div>
-      <div>
-        <p class="text-[11px] text-muted uppercase tracking-wider mb-2">Cumulative</p>
-        <div class="h-56"><canvas id="burn-chart"></canvas></div>
-      </div>
-    </div>
+    <div class="h-64"><canvas id="burn-chart"></canvas></div>
   </section>
 
   <!-- Month over month + Savings -->
@@ -655,7 +646,7 @@ if (chartsAvailable()) {
   Chart.defaults.plugins.tooltip.displayColors = false;
 }
 
-let donutChart, burnChart, burnDailyChart, monthlyChart, savingsChart, investmentsChart;
+let donutChart, burnChart, monthlyChart, savingsChart, investmentsChart;
 let selectedCategory = '';
 let selectedSpendView = 'wallet';
 let categoryColorMap = {};
@@ -836,37 +827,7 @@ async function loadDailyBurn(month, category) {
   const cumulative = d.series.map(p => p.cumulative);
   const label = burnChartLabel(category);
 
-  if (!chartsAvailable()) { noChartFallback('burn-daily-chart'); noChartFallback('burn-chart'); return; }
-
-  if (burnDailyChart) burnDailyChart.destroy();
-  burnDailyChart = new Chart(document.getElementById('burn-daily-chart'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        label,
-        data: daily,
-        backgroundColor: 'rgba(245,158,11,0.6)',
-        borderRadius: 3,
-      }],
-    },
-    options: {
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title: (items) => `Day ${items[0].label}`,
-            label: (ctx) => `${label}: ${fmtINR(ctx.raw)}`,
-          },
-        },
-      },
-      scales: {
-        x: { grid: { color: '#1b1e29', display: false }, ticks: { color: '#8b8fa3' } },
-        y: { grid: { color: '#1b1e29' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
-      },
-    },
-  });
+  if (!chartsAvailable()) { noChartFallback('burn-chart'); return; }
 
   if (burnChart) burnChart.destroy();
   const canvas = document.getElementById('burn-chart');
@@ -876,29 +837,42 @@ async function loadDailyBurn(month, category) {
   gradient.addColorStop(1, 'rgba(245,158,11,0.02)');
 
   burnChart = new Chart(canvas, {
-    type: 'line',
     data: {
       labels,
-      datasets: [{
-        label: `Cumulative ${label.toLowerCase()}`,
-        data: cumulative,
-        borderColor: '#f59e0b',
-        backgroundColor: gradient,
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: '#f59e0b',
-        pointHoverBorderColor: '#151822',
-        pointHoverBorderWidth: 2,
-        borderWidth: 2.5,
-      }],
+      datasets: [
+        {
+          type: 'bar',
+          label,
+          data: daily,
+          backgroundColor: 'rgba(245,158,11,0.5)',
+          borderRadius: 3,
+          yAxisID: 'y',
+          order: 2,
+        },
+        {
+          type: 'line',
+          label: `Cumulative ${label.toLowerCase()}`,
+          data: cumulative,
+          borderColor: '#f59e0b',
+          backgroundColor: gradient,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: '#f59e0b',
+          pointHoverBorderColor: '#151822',
+          pointHoverBorderWidth: 2,
+          borderWidth: 2.5,
+          yAxisID: 'y1',
+          order: 1,
+        },
+      ],
     },
     options: {
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { display: false },
+        legend: { labels: { color: '#8b8fa3', usePointStyle: true, boxWidth: 8 } },
         tooltip: {
           callbacks: {
             title: (items) => `Day ${items[0].label}`,
@@ -908,7 +882,16 @@ async function loadDailyBurn(month, category) {
       },
       scales: {
         x: { grid: { color: '#1b1e29', display: false }, ticks: { color: '#8b8fa3' } },
-        y: { grid: { color: '#1b1e29' }, ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) } },
+        y: {
+          position: 'left',
+          grid: { color: '#1b1e29' },
+          ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) },
+        },
+        y1: {
+          position: 'right',
+          grid: { display: false },
+          ticks: { color: '#8b8fa3', callback: (v) => fmtINR(v) },
+        },
       },
     },
   });
@@ -1081,10 +1064,11 @@ function renderInvestmentsStat(d, vehicleCategory) {
     if (hasGain) {
       const sign = v.gain >= 0 ? '+' : '−';
       const gainColor = v.gain >= 0 ? 'text-emerald-400' : 'text-red-400';
+      const pctStr = (v.gain_pct !== null && v.gain_pct !== undefined) ? ` (${v.gain_pct.toFixed(1)}%)` : '';
       statEl.innerHTML = `Value ${fmtINR(v.latest_value)} vs ${fmtINR(v.contributed)} contributed — ` +
-        `<span class="${gainColor}">${sign}${fmtINR(Math.abs(v.gain))} (${v.gain_pct.toFixed(1)}%)</span>`;
+        `<span class="${gainColor}">${sign}${fmtINR(Math.abs(v.gain))}${pctStr}</span>`;
     } else {
-      statEl.innerHTML = `<span class="text-muted">${fmtINR(v.contributed)} contributed so far${v.latest_value != null ? ` · value ${fmtINR(v.latest_value)} (first recorded — gain shows from next update)` : ' — no value logged yet'}.</span>`;
+      statEl.innerHTML = `<span class="text-muted">${fmtINR(v.contributed)} contributed so far — no value logged yet.</span>`;
     }
   } else if (d.total_gain !== null && d.total_gain !== undefined) {
     const sign = d.total_gain >= 0 ? '+' : '−';

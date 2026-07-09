@@ -913,18 +913,6 @@ def get_snapshot_as_of(category, month):
         return dict(row) if row else None
 
 
-def get_previous_snapshot_before(category, month):
-    """The snapshot immediately before `month` (strictly earlier) — the
-    baseline used to compute incremental gain for the snapshot at `month`."""
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT month, value, note, updated_at FROM investment_snapshots "
-            "WHERE category = ? AND month < ? ORDER BY month DESC LIMIT 1",
-            (category, month),
-        ).fetchone()
-        return dict(row) if row else None
-
-
 def get_contributions_between(category, after_month_exclusive, through_month_inclusive):
     """Sum of a category's transactions after the end of after_month_exclusive
     (or all-time if None) through the end of through_month_inclusive — the
