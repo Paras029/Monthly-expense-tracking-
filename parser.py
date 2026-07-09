@@ -4,6 +4,7 @@ Logging must cost zero API calls in the common case: only messages whose
 category can't be confidently resolved from keywords fall through to Gemini.
 """
 import re
+import time
 
 import requests
 
@@ -16,6 +17,11 @@ _gemini_cache = {}
 
 GEMINI_MODEL = "gemini-3.5-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+
+# HTTP statuses worth a short retry: transient overload/rate-limit on
+# Google's side, not something wrong with the request itself.
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_RETRY_DELAYS = (1, 2)  # seconds, between the 3 attempts
 
 
 def call_gemini(prompt, temperature=0.0, contents=None):
@@ -32,6 +38,12 @@ def call_gemini(prompt, temperature=0.0, contents=None):
     "user"|"model", "parts": [{"text": ...}]}, ...]`) for chat.py's
     conversation history — `prompt` is ignored when `contents` is given.
 
+    Retries up to twice more (3 attempts total, short backoff) on a
+    transient 429/5xx from Google's side — chat's larger multi-turn payload
+    takes longer to generate than a short classification/recap prompt, so
+    it's more likely to land during a brief overload window; a bare
+    "Service Unavailable" shouldn't surface as a hard failure on the first try.
+
     Returns the response text, or None if no API key is configured. Raises
     on any HTTP/parsing error — callers are expected to catch and fall back.
     """
@@ -39,24 +51,28 @@ def call_gemini(prompt, temperature=0.0, contents=None):
         return None
 
     payload_contents = contents if contents is not None else [{"parts": [{"text": prompt}]}]
-    resp = requests.post(
-        GEMINI_URL,
-        headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
-        json={
-            "contents": payload_contents,
-            "generationConfig": {
-                "temperature": temperature,
-                # Gemini 3.x models default to 'medium' thinking effort, which
-                # adds meaningful latency for no benefit on these simple
-                # classification/chat tasks — 'low' keeps calls fast and
-                # comfortably inside the timeout below. Ignored harmlessly by
-                # older (2.x) model families that don't support it.
-                "thinkingConfig": {"thinkingLevel": "low"},
-            },
+    payload = {
+        "contents": payload_contents,
+        "generationConfig": {
+            "temperature": temperature,
+            # Gemini 3.x models default to 'medium' thinking effort, which
+            # adds meaningful latency for no benefit on these simple
+            # classification/chat tasks — 'low' keeps calls fast and
+            # comfortably inside the timeout below. Ignored harmlessly by
+            # older (2.x) model families that don't support it.
+            "thinkingConfig": {"thinkingLevel": "low"},
         },
-        timeout=30,
-    )
+    }
+    headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
+
+    resp = None
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None)):
+        resp = requests.post(GEMINI_URL, headers=headers, json=payload, timeout=30)
+        if resp.status_code not in _RETRYABLE_STATUSES or delay is None:
+            break
+        time.sleep(delay)
     resp.raise_for_status()
+
     data = resp.json()
     candidates = data.get("candidates") or []
     if not candidates:

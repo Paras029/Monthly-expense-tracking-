@@ -440,6 +440,14 @@ groceries 1200 weekly               -> cadence=weekly (expense_type stays the ca
 
 Keep Gemini usage minimal and wrapped in try/except so the bot never crashes on API issues.
 
+`parser.call_gemini()` (the shared REST call used by all three Gemini call sites — this
+classifier, the daily recap, and the chat assistant) retries up to twice more (3 attempts
+total, 1s/2s backoff) on a transient `429`/`5xx` from Google's side — a bare "Service
+Unavailable" is a brief overload on their end, not a bug, and chat's larger multi-turn
+payload takes longer to generate so it's more likely to land during one of those windows
+than a short classification/recap prompt. Non-retryable errors (a `4xx` other than 429,
+a parse failure) still fail immediately.
+
 ---
 
 ## 7. Telegram bot (`bot.py`)
