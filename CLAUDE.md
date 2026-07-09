@@ -442,11 +442,14 @@ Keep Gemini usage minimal and wrapped in try/except so the bot never crashes on 
 
 `parser.call_gemini()` (the shared REST call used by all three Gemini call sites — this
 classifier, the daily recap, and the chat assistant) retries up to twice more (3 attempts
-total, 1s/2s backoff) on a transient `429`/`5xx` from Google's side — a bare "Service
-Unavailable" is a brief overload on their end, not a bug, and chat's larger multi-turn
-payload takes longer to generate so it's more likely to land during one of those windows
-than a short classification/recap prompt. Non-retryable errors (a `4xx` other than 429,
-a parse failure) still fail immediately.
+total, 1s/2s backoff) on a transient `429`/`5xx` from Google's side, or on a client-side
+network timeout/connection error (`requests.exceptions.RequestException`) — chat's larger
+multi-turn payload (system prompt + data snapshot + history) takes noticeably longer to
+generate than the short single-turn classify/recap prompts, so it's both more likely to
+land during a brief overload window on Google's side and more likely to run past a short
+read timeout. The read timeout itself is 60s (bumped from an original 30s once a real
+`ReadTimeout` showed up in practice for chat specifically). Non-retryable errors (a `4xx`
+other than 429, a parse failure) still fail immediately.
 
 ---
 

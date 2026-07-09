@@ -130,13 +130,9 @@ def chat_reply(history, user_message, month=None):
         if not reply or not reply.strip():
             raise ValueError("empty response from Gemini")
         return {"reply": reply.strip(), "source": "ai"}
-    except Exception as e:
+    except Exception:
         logger.exception("chat_reply failed")
-        # Temporarily surfaced in the reply itself (not just server logs) so
-        # the real cause is visible straight from the chat window while this
-        # is being debugged — safe to do since it's just an exception
-        # class/message, no secrets.
         return {
-            "reply": f"Sorry, I couldn't reach the assistant right now ({type(e).__name__}: {e}) — try again in a moment.",
+            "reply": "Sorry, I couldn't reach the assistant right now — try again in a moment.",
             "source": "error",
         }

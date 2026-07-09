@@ -39,10 +39,11 @@ def call_gemini(prompt, temperature=0.0, contents=None):
     conversation history — `prompt` is ignored when `contents` is given.
 
     Retries up to twice more (3 attempts total, short backoff) on a
-    transient 429/5xx from Google's side — chat's larger multi-turn payload
-    takes longer to generate than a short classification/recap prompt, so
-    it's more likely to land during a brief overload window; a bare
-    "Service Unavailable" shouldn't surface as a hard failure on the first try.
+    transient 429/5xx from Google's side, or on a network-level timeout/
+    connection error — chat's larger multi-turn payload takes longer to
+    generate than a short classification/recap prompt, so it's more likely
+    to land during a brief overload window or just run past the read
+    timeout; neither should surface as a hard failure on the first try.
 
     Returns the response text, or None if no API key is configured. Raises
     on any HTTP/parsing error — callers are expected to catch and fall back.
@@ -66,11 +67,30 @@ def call_gemini(prompt, temperature=0.0, contents=None):
     headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
 
     resp = None
-    for attempt, delay in enumerate((*_RETRY_DELAYS, None)):
-        resp = requests.post(GEMINI_URL, headers=headers, json=payload, timeout=30)
-        if resp.status_code not in _RETRYABLE_STATUSES or delay is None:
-            break
-        time.sleep(delay)
+    last_exc = None
+    for delay in (*_RETRY_DELAYS, None):
+        is_last_attempt = delay is None
+        try:
+            # 60s read timeout: chat's larger multi-turn payload (system
+            # prompt + data snapshot + history) takes noticeably longer to
+            # generate than the short single-turn classify/recap prompts,
+            # and 30s wasn't always enough even at thinkingLevel=low.
+            resp = requests.post(GEMINI_URL, headers=headers, json=payload, timeout=60)
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            resp = None
+            if is_last_attempt:
+                break
+            time.sleep(delay)
+            continue
+
+        if resp.status_code in _RETRYABLE_STATUSES and not is_last_attempt:
+            time.sleep(delay)
+            continue
+        break
+
+    if resp is None:
+        raise last_exc
     resp.raise_for_status()
 
     data = resp.json()
