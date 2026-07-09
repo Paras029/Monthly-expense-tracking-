@@ -847,11 +847,14 @@ each call small rather than reducing call frequency further:
   `chatHistory` (capped to the last 16 entries / 8 exchanges client-side) and replays it
   on every request via `POST /api/chat`'s `history` field, since Gemini's
   `generateContent` is stateless per call and needs the full turn sequence to maintain
-  context. `chat._build_contents()` injects the data snapshot once, as part of the
-  first turn, rather than repeating a system-prompt-sized block on every message.
+  context. The data snapshot is sent via the request's dedicated `systemInstruction`
+  field (rebuilt fresh each call, since the underlying spending data can change between
+  messages) rather than embedded as a fake first user/model turn inside `contents` —
+  `contents` holds only the real back-and-forth, which is both the API's documented
+  mechanism for this and avoids duplicating a data blob into the conversation history.
 - **Efficiency:** exactly one Gemini call per message the user actually sends — nothing
-  fires on typing, focus, or a timer. `parser.call_gemini()` gained an optional
-  `contents` param (a pre-built multi-turn list) to support this multi-turn shape
+  fires on typing, focus, or a timer. `parser.call_gemini()` gained optional `contents`
+  (a pre-built multi-turn list) and `system_instruction` params to support this shape
   without duplicating the REST-call plumbing that already exists for the single-turn
   category-classification and daily-recap call sites.
 - **Fallback:** if `GEMINI_API_KEY` is unset, replies with a plain message explaining

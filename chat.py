@@ -95,24 +95,14 @@ def _gather_financial_context(month):
     }
 
 
-def _build_contents(history, user_message, data_context):
+def _build_contents(history, user_message):
     """history: list of {role: 'user'|'model', text: str} from prior turns
-    (already capped). The data snapshot is injected once as part of the
-    first turn so it's always in context without re-describing it (and
-    re-spending tokens on it) every single message."""
-    intro = SYSTEM_CONTEXT_TEMPLATE.format(data=json.dumps(data_context))
-    contents = []
-    if not history:
-        contents.append({"role": "user", "parts": [{"text": f"{intro}\n\nUser: {user_message}"}]})
-        return contents
-
-    contents.append({"role": "user", "parts": [{"text": intro}]})
-    contents.append({
-        "role": "model",
-        "parts": [{"text": "Got it — I can see your spending data. What would you like to know?"}],
-    })
-    for turn in history[-MAX_HISTORY_TURNS * 2:]:
-        contents.append({"role": turn["role"], "parts": [{"text": turn["text"]}]})
+    (already capped). Just the actual back-and-forth — the data snapshot
+    goes in the dedicated systemInstruction field (see chat_reply) instead
+    of being embedded here as a fake first user/model turn: that's the
+    API's documented mechanism for this, avoids duplicating the data blob
+    into the conversation history, and keeps `contents` to real turns only."""
+    contents = [{"role": turn["role"], "parts": [{"text": turn["text"]}]} for turn in history]
     contents.append({"role": "user", "parts": [{"text": user_message}]})
     return contents
 
@@ -125,8 +115,9 @@ def chat_reply(history, user_message, month=None):
     try:
         month = month or date.today().strftime("%Y-%m")
         data_context = _gather_financial_context(month)
-        contents = _build_contents(history[-MAX_HISTORY_TURNS * 2:], user_message, data_context)
-        reply = parser.call_gemini(None, temperature=0.4, contents=contents)
+        system_instruction = SYSTEM_CONTEXT_TEMPLATE.format(data=json.dumps(data_context))
+        contents = _build_contents(history[-MAX_HISTORY_TURNS * 2:], user_message)
+        reply = parser.call_gemini(None, temperature=0.4, contents=contents, system_instruction=system_instruction)
         if not reply or not reply.strip():
             raise ValueError("empty response from Gemini")
         return {"reply": reply.strip(), "source": "ai"}

@@ -24,7 +24,7 @@ _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 _RETRY_DELAYS = (1, 2)  # seconds, between the 3 attempts
 
 
-def call_gemini(prompt, temperature=0.0, contents=None):
+def call_gemini(prompt, temperature=0.0, contents=None, system_instruction=None):
     """Plain REST call to the Gemini API — deliberately not the official
     google-genai SDK. That SDK pulls in google-auth -> cryptography, a
     package with compiled Rust native code; on Termux the PyPI wheel for
@@ -37,6 +37,10 @@ def call_gemini(prompt, temperature=0.0, contents=None):
     automatically), or a pre-built multi-turn `contents` list (`[{"role":
     "user"|"model", "parts": [{"text": ...}]}, ...]`) for chat.py's
     conversation history — `prompt` is ignored when `contents` is given.
+    `system_instruction` (plain string, optional) goes in the dedicated
+    `systemInstruction` request field rather than being embedded as a fake
+    first conversation turn — the API's documented mechanism for this, and
+    lighter than duplicating a data blob inside `contents`.
 
     Retries up to twice more (3 attempts total, short backoff) on a
     transient 429/5xx from Google's side, or on a network-level timeout/
@@ -56,14 +60,16 @@ def call_gemini(prompt, temperature=0.0, contents=None):
         "contents": payload_contents,
         "generationConfig": {
             "temperature": temperature,
-            # Gemini 3.x models default to 'medium' thinking effort, which
-            # adds meaningful latency for no benefit on these simple
-            # classification/chat tasks — 'low' keeps calls fast and
-            # comfortably inside the timeout below. Ignored harmlessly by
+            # Gemini 3.x models default to 'medium' thinking effort, which adds
+            # meaningful latency for no benefit on these simple classification/
+            # chat/recap tasks — 'minimal' (the lowest level gemini-3.5-flash
+            # supports) keeps calls as fast as possible. Ignored harmlessly by
             # older (2.x) model families that don't support it.
-            "thinkingConfig": {"thinkingLevel": "low"},
+            "thinkingConfig": {"thinkingLevel": "minimal"},
         },
     }
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
     headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
 
     resp = None
